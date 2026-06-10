@@ -265,6 +265,50 @@ details[open] summary { margin-bottom: 8px; }
   text-decoration: underline;
 }
 
+/* ---------- visualizations ---------- */
+
+.rings { display: flex; gap: 8px; justify-content: space-around; flex-wrap: wrap; margin: 8px 0 4px; }
+.ring { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 96px; }
+.ring svg { width: 96px; height: 96px; }
+.ring-val { font-size: 24px; font-weight: 800; fill: var(--text); }
+.ring-target { font-size: 13px; fill: var(--muted); }
+.ring-label { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+
+.chart { width: 100%; height: auto; display: block; }
+.chart .gridline { stroke: var(--border); stroke-width: 1; }
+.chart .axis { font-size: 12px; fill: var(--muted); }
+.chart .pt-label { font-size: 13px; font-weight: 700; fill: var(--text); }
+
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-bottom: 16px; }
+.card.stat { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 16px 8px; margin-bottom: 0; }
+.stat-num { font-size: 32px; font-weight: 800; letter-spacing: -0.02em; color: var(--text); line-height: 1.1; }
+
+.heatmap { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 1fr); gap: 3px; margin-top: 6px; }
+.hm-cell { aspect-ratio: 1; border-radius: 3px; background: #e8edf5; display: inline-block; min-width: 8px; }
+.hm-cell.l1 { background: #7fc8a9; }
+.hm-cell.l2 { background: #10b981; }
+.hm-cell.future { background: transparent; border: 1px dashed var(--border); }
+.hm-legend { display: flex; align-items: center; gap: 5px; justify-content: flex-end; margin-top: 8px; }
+.hm-legend .hm-cell { width: 12px; min-width: 12px; }
+
+.mg-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
+.mg-label { width: 90px; font-size: 14px; font-weight: 600; color: var(--muted); }
+.mg-track { flex: 1; height: 14px; background: #e8edf5; border-radius: 7px; overflow: hidden; }
+.mg-fill { height: 100%; border-radius: 7px; transition: width 0.3s; }
+.mg-val { width: 32px; text-align: right; font-weight: 700; font-size: 14px; }
+
+.inline-select { width: auto; max-width: 60%; padding: 6px 10px; font-size: 14px; }
+
+.year-track { position: relative; margin: 18px 0 6px; padding-top: 22px; }
+.year-bar { display: flex; height: 26px; border-radius: 8px; overflow: hidden; }
+.yt-seg { flex: 1; display: flex; align-items: center; justify-content: center; }
+.yt-seg span { color: #fff; font-size: 11.5px; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,0.25); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 4px; }
+.yt-marker { position: absolute; top: 0; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; z-index: 1; }
+.yt-marker .small { font-size: 11px; font-weight: 700; color: var(--text); }
+.yt-pin { width: 2px; height: 30px; background: var(--text); border-radius: 1px; order: 2; }
+
+.empty-state { text-align: center; padding: 40px 20px; }
+
 /* ---------- Plan Builder wizard ---------- */
 
 .callout { border-color: var(--accent); background: linear-gradient(180deg, #fdfeff, var(--accent-soft)); }

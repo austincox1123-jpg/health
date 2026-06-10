@@ -10,6 +10,7 @@ let eatSearch = "";
 let trainWeekOffset = 0; // weeks relative to now in the Train dashboard
 let editing = null; // { dayIndex, draft } while customizing a workout day
 let wizard = null; // { step, a: answers } while the Plan Builder is open
+let progressEx = null; // exercise selected in the Progress strength chart
 
 function loadState() {
   let s = { profile: null, workouts: [], food: {}, customFoods: [] };
@@ -85,6 +86,7 @@ const TABS = [
   { id: "today", label: "Today" },
   { id: "train", label: "Train" },
   { id: "eat", label: "Eat" },
+  { id: "progress", label: "Progress" },
   { id: "learn", label: "Learn" },
   { id: "profile", label: "Profile" },
 ];
@@ -114,6 +116,7 @@ function render() {
   else if (view === "log") main.innerHTML = renderLog();
   else if (view === "edit") main.innerHTML = renderEditor();
   else if (view === "plan") main.innerHTML = renderWizard();
+  else if (view === "progress") main.innerHTML = renderProgress();
   else if (view === "eat") main.innerHTML = renderEat();
   else if (view === "learn") main.innerHTML = renderLearn();
   else main.innerHTML = renderProfile();
@@ -121,14 +124,14 @@ function render() {
 
 // ---------- shared bits ----------
 
-function macroBar(label, val, target, unit) {
-  const pct = Math.min(100, target > 0 ? (val / target) * 100 : 0);
-  const over = val > target * 1.05;
+function macroRings(totals, targets) {
   return `
-    <div class="macro-row">
-      <div class="macro-label"><span>${label}</span><span>${Math.round(val)} / ${target} ${unit}</span></div>
-      <div class="bar"><div class="bar-fill ${over ? "over" : ""}" style="width:${pct}%"></div></div>
-    </div>`;
+  <div class="rings">
+    ${svgRing(totals.cal, targets.cal, "Calories", "#3b82f6")}
+    ${svgRing(totals.p, targets.p, "Protein g", "#10b981")}
+    ${svgRing(totals.c, targets.c, "Carbs g", "#f59e0b")}
+    ${svgRing(totals.f, targets.f, "Fat g", "#8b5cf6")}
+  </div>`;
 }
 
 function weekWorkoutCount() {
@@ -171,10 +174,7 @@ function renderToday() {
     </div>
     <div class="card">
       <h2>Nutrition</h2>
-      ${macroBar("Calories", totals.cal, targets.cal, "kcal")}
-      ${macroBar("Protein", totals.p, targets.p, "g")}
-      ${macroBar("Carbs", totals.c, targets.c, "g")}
-      ${macroBar("Fat", totals.f, targets.f, "g")}
+      ${macroRings(totals, targets)}
       <button class="btn" data-go="eat">Log food</button>
     </div>
     </div>`;
@@ -280,7 +280,7 @@ function renderTrain() {
       <div class="row-between"><h2>Q${pos.quarter + 1} · ${q.name} block</h2>${phaseBadge(pos)}</div>
       <p class="muted">${q.focus}</p>
       <p class="muted small">Year ${pos.year + 1} · Mesocycle ${pos.meso + 1} of 3 · Week ${pos.weekInMeso + 1} of 4 · Plan week ${pos.weekIdx + 1} of 48</p>
-      <div class="bar"><div class="bar-fill" style="width:${((pos.weekIdx + 1) / 48) * 100}%"></div></div>
+      ${yearTimeline(quarters, planPos(0))}
       ${state.planConfig ? `<p class="muted small plan-line">Your plan: ${planSummary()} <button class="link-btn" data-action="open-wizard">Retune</button></p>` : ""}
     </div>
 
@@ -597,6 +597,82 @@ function finishWorkout() {
   go("train");
 }
 
+// ---------- Progress ----------
+
+function renderProgress() {
+  const w = state.workouts;
+  if (!w.length) {
+    return `
+      <h1>Progress</h1>
+      <div class="card empty-state">
+        <h2>No data yet</h2>
+        <p class="muted">Log your first workout and this page fills up: strength trends per lift, weekly volume, muscle balance, and a consistency heatmap.</p>
+        <button class="btn primary" data-go="train">Go train</button>
+      </div>`;
+  }
+
+  let totalSets = 0, tonnage = 0, weekSets = 0;
+  const monday = mondayOf(new Date());
+  w.forEach((wo) => {
+    const thisWeek = new Date(wo.date + "T12:00") >= monday;
+    wo.entries.forEach((e) => {
+      totalSets += e.sets.length;
+      if (thisWeek) weekSets += e.sets.length;
+      e.sets.forEach((s) => { tonnage += (s.weight || 0) * (s.reps || 0); });
+    });
+  });
+  const streak = weekStreak(w);
+
+  const exercises = chartableExercises(w, 2);
+  if (!progressEx || !exercises.includes(progressEx)) progressEx = exercises[0] || null;
+  const trend = progressEx ? exerciseTrend(w, progressEx).slice(-15) : [];
+  const best = trend.length ? Math.max(...trend.map((p) => p.y)) : 0;
+
+  const split = muscleSplit(w, 28);
+  const hasSplit = split.some((g) => g.y > 0);
+
+  return `
+    <h1>Progress</h1>
+
+    <div class="stat-grid">
+      <div class="card stat"><span class="stat-num">${w.length}</span><span class="muted small">workouts logged</span></div>
+      <div class="card stat"><span class="stat-num">${streak}</span><span class="muted small">week streak</span></div>
+      <div class="card stat"><span class="stat-num">${weekSets}</span><span class="muted small">sets this week</span></div>
+      <div class="card stat"><span class="stat-num">${fmtK(Math.round(tonnage))}</span><span class="muted small">lb lifted all-time</span></div>
+    </div>
+
+    <div class="card">
+      <div class="row-between">
+        <h2>Consistency</h2>
+        <span class="muted small">last 16 weeks</span>
+      </div>
+      ${heatmapHTML(w, 16)}
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="row-between">
+          <h2>Strength trend</h2>
+          ${exercises.length ? `<select id="progress-ex" class="inline-select">${exercises.map((x) => `<option ${x === progressEx ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>` : ""}
+        </div>
+        <p class="muted small">Estimated 1RM per session (Epley), best set of the day.${best ? ` All-time best: <strong>${best} lb</strong>.` : ""}</p>
+        ${progressEx ? svgLine(trend, "#3b82f6") : `<p class="muted small">Log an exercise at least twice to unlock this chart.</p>`}
+      </div>
+
+      <div class="card">
+        <h2>Weekly volume</h2>
+        <p class="muted small">Total weight moved (sets × reps × load), last 12 weeks.</p>
+        ${svgBars(weeklyTonnage(w, 12), "#10b981")}
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Muscle balance</h2>
+      <p class="muted small">Hard sets per muscle group, last 4 weeks. Big gaps here are where growth hides.</p>
+      ${hasSplit ? hBars(split, "#8b5cf6") : `<p class="muted small">Log a few workouts to see your split.</p>`}
+    </div>`;
+}
+
 // ---------- Eat ----------
 
 function renderEat() {
@@ -622,10 +698,7 @@ function renderEat() {
     <div class="grid-2">
     <div class="card">
       <h2>Today vs targets</h2>
-      ${macroBar("Calories", totals.cal, targets.cal, "kcal")}
-      ${macroBar("Protein", totals.p, targets.p, "g")}
-      ${macroBar("Carbs", totals.c, targets.c, "g")}
-      ${macroBar("Fat", totals.f, targets.f, "g")}
+      ${macroRings(totals, targets)}
       <p class="muted small">Targets: ${targets.cal} kcal (${GOALS[state.profile.goal].label}, maintenance ≈ ${targets.tdee} kcal)</p>
     </div>
 
@@ -988,7 +1061,10 @@ document.addEventListener("click", (e) => {
 });
 
 document.addEventListener("input", (e) => {
-  if (e.target.id === "food-search") {
+  if (e.target.id === "progress-ex") {
+    progressEx = e.target.value;
+    render();
+  } else if (e.target.id === "food-search") {
     eatSearch = e.target.value;
     render();
     const el = document.getElementById("food-search");
