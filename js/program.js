@@ -25,36 +25,138 @@ const WEEKS_PER_YEAR = WEEKS_PER_QUARTER * 4; // 48
 // main: rep range applied to heavy compound lifts during the block
 // accShift: added to accessory rep ranges
 // setMult: scales set counts (volume emphasis up/down)
-const QUARTERS = [
-  {
+// lean / engine flag blocks with special intent (cut pairing, conditioning push)
+const BLOCK_TYPES = {
+  foundation: {
+    key: "foundation",
     name: "Foundation",
     focus: "Re-groove technique outside the WOD format: moderate loads, strict tempo, build baseline volume.",
     main: [6, 8],
     accShift: 2,
     setMult: 1,
   },
-  {
+  strength: {
+    key: "strength",
     name: "Strength",
     focus: "Heavy main lifts at low reps. Accessories get heavier and tighter; volume holds steady.",
     main: [3, 5],
     accShift: -2,
     setMult: 1,
   },
-  {
+  hypertrophy: {
+    key: "hypertrophy",
     name: "Hypertrophy",
     focus: "Volume push for muscle growth: higher reps, an extra accessory set, close to failure.",
     main: [6, 10],
     accShift: 3,
     setMult: 1.15,
   },
-  {
+  peak: {
+    key: "peak",
     name: "Peak & Test",
     focus: "Heavy doubles and triples, trimmed accessories. Test new rep maxes in the final build week.",
     main: [2, 4],
     accShift: 0,
     setMult: 0.85,
   },
-];
+  lean: {
+    key: "lean",
+    name: "Summer Lean",
+    focus: "Diet down while holding strength: mains stay heavy, volume stays honest, conditioning climbs. Pair with the Cut goal in Profile.",
+    main: [5, 8],
+    accShift: 1,
+    setMult: 1,
+    lean: true,
+  },
+  engine: {
+    key: "engine",
+    name: "Engine",
+    focus: "Conditioning push: lifting holds at maintenance volume, every session ends with a finisher — add 1-2 standalone cardio days.",
+    main: [4, 6],
+    accShift: 0,
+    setMult: 0.8,
+    engine: true,
+  },
+};
+
+// Default year for anyone who hasn't run the in-app Plan Builder.
+const QUARTERS = [BLOCK_TYPES.foundation, BLOCK_TYPES.strength, BLOCK_TYPES.hypertrophy, BLOCK_TYPES.peak];
+
+// ---------- plan builder (in-app questionnaire -> tailored year) ----------
+
+// Block sequence per #1 priority. Cyclic — rotation preserves adjacency.
+const PRIORITY_SEQUENCES = {
+  size: ["foundation", "hypertrophy", "strength", "hypertrophy"],
+  strength: ["foundation", "hypertrophy", "strength", "peak"],
+  athletic: ["foundation", "hypertrophy", "strength", "lean"],
+  both: ["foundation", "hypertrophy", "strength", "peak"],
+};
+
+const WEAK_POINTS = {
+  chestArms: { label: "Chest & arms", re: /bench|fly|pec|dip|chest|push-up|curl|triceps|skullcrusher|pushdown/i },
+  back: { label: "Back & lats", re: /row|pulldown|pull-up|chin-up|pullover|shrug|straight-arm/i },
+  shoulders: { label: "Shoulders", re: /lateral|shoulder press|face pull|rear delt|arnold|upright|push press/i },
+  legs: { label: "Legs", re: /squat|leg press|leg curl|leg extension|lunge|calf|romanian|good morning|hip thrust|glute|ham raise|back extension/i },
+};
+
+function distToJuly1(date) {
+  let best = Infinity;
+  for (let y = date.getFullYear() - 1; y <= date.getFullYear() + 1; y++) {
+    best = Math.min(best, Math.abs(date - new Date(y, 6, 1)));
+  }
+  return best;
+}
+
+// Turn Plan Builder answers into the year's four quarters.
+// cfg: { peak: summer|strength|steady, priority: size|strength|athletic|both,
+//        weakPoints: [keys], conditioning: maintain|seasonal|copriority|fade }
+function generateQuarters(cfg, planStartISO) {
+  let seq = [...(PRIORITY_SEQUENCES[cfg.priority] || PRIORITY_SEQUENCES.both)];
+
+  // anchor block: what the year builds toward
+  if (cfg.peak === "summer" && !seq.includes("lean")) seq[3] = "lean";
+  if (cfg.peak === "strength" && !seq.includes("peak")) seq[3] = "peak";
+
+  // rotate so the lean block ends nearest July 1 (leanest for summer)
+  if (cfg.peak === "summer") {
+    const li = seq.indexOf("lean");
+    const start = mondayOf(new Date(planStartISO + "T12:00"));
+    let best = 3, bestDist = Infinity;
+    for (let p = 0; p < 4; p++) {
+      const end = new Date(start);
+      end.setDate(end.getDate() + 12 * 7 * (p + 1));
+      const dist = distToJuly1(end);
+      if (dist < bestDist) { bestDist = dist; best = p; }
+    }
+    seq = seq.map((_, i) => seq[(((i - best + li) % 4) + 4) % 4]);
+  }
+
+  // seasonal engine block: claim a slot away from the anchor block,
+  // never overwriting strength/peak/lean
+  if (cfg.conditioning === "seasonal" && !seq.includes("engine")) {
+    const anchor = Math.max(seq.indexOf("lean"), seq.indexOf("peak"), 0);
+    const replaceable = ["foundation", "hypertrophy"];
+    for (const off of [2, 3, 1]) {
+      const slot = (anchor + off) % 4;
+      if (replaceable.includes(seq[slot])) { seq[slot] = "engine"; break; }
+    }
+  }
+
+  return seq.map((key) => ({ ...BLOCK_TYPES[key] }));
+}
+
+// +1 set on accessories that hit the chosen weak points (max 2 per day,
+// mains excluded) — applied on build weeks only.
+function addEmphasis(blocks, weakPoints) {
+  let added = 0;
+  return blocks.map((b) => {
+    if (added >= 2 || b.isMain) return b;
+    const hit = weakPoints.some((k) => WEAK_POINTS[k] && WEAK_POINTS[k].re.test(b.name));
+    if (!hit) return b;
+    added++;
+    return { ...b, sets: b.sets + 1, note: (b.note ? b.note + " · " : "") + "weak-point emphasis: +1 set" };
+  });
+}
 
 const FINISHERS = [
   "Bike: 10 rounds of 30s hard / 60s easy",
@@ -356,6 +458,7 @@ function applyPhase(b, q, isDeload) {
     }
   }
   out.sets = Math.max(1, Math.round(b.sets * q.setMult));
+  out.isMain = isMain;
   if (isDeload) {
     out.sets = Math.max(1, Math.ceil(out.sets * 0.5));
     out.note = (b.note ? b.note + " · " : "") + "deload: ~60% load, 4+ reps in reserve";
@@ -364,13 +467,22 @@ function applyPhase(b, q, isDeload) {
 }
 
 // Build the week's workouts from a base template + plan position.
-function weekProgram(template, pos, includeConditioning) {
-  const q = QUARTERS[pos.quarter];
-  return template.map((d) => ({
-    day: d.day,
-    finisher: includeConditioning ? d.finisher : undefined,
-    blocks: d.blocks.map((b) => applyPhase(b, q, pos.isDeload)),
-  }));
+// opts: { quarters, conditioning (bool), conditioningMode, weakPoints }
+function weekProgram(template, pos, opts) {
+  opts = opts || {};
+  const quarters = opts.quarters || QUARTERS;
+  const q = quarters[pos.quarter];
+  const finishersOn = opts.conditioningMode === "fade" ? false : opts.conditioning !== false;
+  const finisherEveryDay = q.engine || opts.conditioningMode === "copriority";
+  return template.map((d, di) => {
+    let blocks = d.blocks.map((b) => applyPhase(b, q, pos.isDeload));
+    if (!pos.isDeload && opts.weakPoints && opts.weakPoints.length) {
+      blocks = addEmphasis(blocks, opts.weakPoints);
+    }
+    let finisher = d.finisher;
+    if (finisherEveryDay && !finisher) finisher = FINISHERS[di % FINISHERS.length];
+    return { day: d.day, finisher: finishersOn ? finisher : undefined, blocks };
+  });
 }
 
 // ---------- 1RM percentage loading ----------

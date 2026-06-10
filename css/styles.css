@@ -265,6 +265,44 @@ details[open] summary { margin-bottom: 8px; }
   text-decoration: underline;
 }
 
+/* ---------- Plan Builder wizard ---------- */
+
+.callout { border-color: var(--accent); background: linear-gradient(180deg, #fdfeff, var(--accent-soft)); }
+.callout .btn { flex-shrink: 0; }
+.plan-line { margin-top: 10px; }
+
+.wiz-progress { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.wiz-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #d7dfeb;
+}
+.wiz-dot.active { background: var(--accent); }
+.wiz-dot.done { background: var(--accent-2); }
+
+.opt-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-top: 12px; }
+
+.opt-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  background: var(--card);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  font-size: 15px;
+  font-family: inherit;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.opt-card:hover { border-color: #b9cdf2; }
+.opt-card.selected { border-color: var(--accent); background: var(--accent-soft); }
+.opt-card.selected strong { color: #1e4ea8; }
+
 /* ---------- workout editor ---------- */
 
 .edit-row { border-bottom: 1px solid var(--border); padding: 12px 0; }

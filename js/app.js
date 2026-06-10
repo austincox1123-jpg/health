@@ -9,6 +9,7 @@ let session = null; // in-progress workout, not persisted until finished
 let eatSearch = "";
 let trainWeekOffset = 0; // weeks relative to now in the Train dashboard
 let editing = null; // { dayIndex, draft } while customizing a workout day
+let wizard = null; // { step, a: answers } while the Plan Builder is open
 
 function loadState() {
   let s = { profile: null, workouts: [], food: {}, customFoods: [] };
@@ -22,6 +23,8 @@ function loadState() {
   if (!s.customPrograms) s.customPrograms = {};
   if (!s.planStart) s.planStart = null;
   if (!s.maxes) s.maxes = {};
+  if (!s.planConfig) s.planConfig = null;
+  if (!s.planQuarters) s.planQuarters = null;
   return s;
 }
 
@@ -61,6 +64,21 @@ function planPos(offset) {
   return planPositionAt(state.planStart, offset || 0);
 }
 
+// The year's quarters: tailored by the Plan Builder, or the built-in default.
+function activeQuarters() {
+  return state.planQuarters || QUARTERS;
+}
+
+function planOpts() {
+  const c = state.planConfig || {};
+  return {
+    quarters: activeQuarters(),
+    conditioning: state.profile.conditioning,
+    conditioningMode: c.conditioning,
+    weakPoints: c.weakPoints || [],
+  };
+}
+
 // ---------- routing ----------
 
 const TABS = [
@@ -83,7 +101,7 @@ function render() {
     state.planStart = isoOf(mondayOf(new Date()));
     saveState();
   }
-  const trainViews = ["train", "log", "edit"];
+  const trainViews = ["train", "log", "edit", "plan"];
   const nav = TABS.map(
     (t) => `<button class="tab ${view === t.id || (trainViews.includes(view) && t.id === "train") ? "active" : ""}" data-go="${t.id}">${t.label}</button>`
   ).join("");
@@ -95,6 +113,7 @@ function render() {
   else if (view === "train") main.innerHTML = renderTrain();
   else if (view === "log") main.innerHTML = renderLog();
   else if (view === "edit") main.innerHTML = renderEditor();
+  else if (view === "plan") main.innerHTML = renderWizard();
   else if (view === "eat") main.innerHTML = renderEat();
   else if (view === "learn") main.innerHTML = renderLearn();
   else main.innerHTML = renderProfile();
@@ -130,8 +149,8 @@ function renderToday() {
   const targets = macroTargets(p);
   const totals = dayTotals(state.food[todayStr()] || []);
   const pos = planPos(0);
-  const q = QUARTERS[pos.quarter];
-  const program = weekProgram(baseTemplate(), pos, p.conditioning);
+  const q = activeQuarters()[pos.quarter];
+  const program = weekProgram(baseTemplate(), pos, planOpts());
   const done = weekWorkoutCount();
   const nextIdx = Math.min(done, program.length - 1);
   const nextDay = program[nextIdx];
@@ -144,6 +163,8 @@ function renderToday() {
       <div class="row-between"><h2>Training</h2>${phaseBadge(pos)}</div>
       <p class="muted small">${q.name} block · Mesocycle ${pos.meso + 1} of 3 · ${done} of ${p.daysPerWeek} sessions this week</p>
       ${pos.isDeload ? `<p class="suggest">Deload week: cut loads to ~60%, stop far from failure, leave feeling fresh.</p>` : ""}
+      ${q.lean && !pos.isDeload ? `<p class="suggest">Lean block: pair this with the Cut goal in Profile if you haven't already.</p>` : ""}
+      ${q.engine && !pos.isDeload ? `<p class="suggest">Engine block: lifting holds at maintenance — hit every finisher and add 1-2 standalone cardio sessions.</p>` : ""}
       <p>Up next: <strong>${nextDay.day}</strong> — ${nextDay.blocks.length} exercises${nextDay.finisher ? " + conditioning finisher" : ""}</p>
       <button class="btn primary" data-start="${nextIdx}">Start ${nextDay.day}</button>
       ${lastLog ? `<p class="muted small">Last session: ${lastLog.day} on ${lastLog.date}</p>` : ""}
@@ -161,15 +182,31 @@ function renderToday() {
 
 // ---------- Train dashboard ----------
 
+const PLAN_LABELS = {
+  peak: { summer: "summer physique peak", strength: "strength milestone", steady: "steady year-round cycle" },
+  priority: { size: "size first", strength: "strength first", athletic: "lean & athletic", both: "50/50 size & strength" },
+  conditioning: { maintain: "maintain the engine", seasonal: "seasonal engine block", copriority: "engine co-priority", fade: "no conditioning" },
+};
+
+function planSummary() {
+  const c = state.planConfig;
+  if (!c) return "";
+  const bits = [PLAN_LABELS.peak[c.peak], PLAN_LABELS.priority[c.priority], PLAN_LABELS.conditioning[c.conditioning]].filter(Boolean);
+  const wp = (c.weakPoints || []).map((k) => WEAK_POINTS[k].label.toLowerCase());
+  if (wp.length) bits.push("emphasis: " + wp.join(", "));
+  return bits.join(" · ");
+}
+
 function renderTrain() {
   const p = state.profile;
   const pos = planPos(trainWeekOffset);
-  const q = QUARTERS[pos.quarter];
-  const week = weekProgram(baseTemplate(), pos, p.conditioning);
+  const quarters = activeQuarters();
+  const q = quarters[pos.quarter];
+  const week = weekProgram(baseTemplate(), pos, planOpts());
   const isCurrentWeek = trainWeekOffset === 0;
   const customized = !!state.customPrograms[p.daysPerWeek];
 
-  const quarterCards = QUARTERS.map((qq, i) => {
+  const quarterCards = quarters.map((qq, i) => {
     const current = i === pos.quarter;
     return `
       <div class="q-card ${current ? "current" : ""}">
@@ -224,11 +261,27 @@ function renderTrain() {
   return `
     <h1>Train</h1>
 
+    ${
+      state.planConfig
+        ? ""
+        : `
+    <div class="card callout">
+      <div class="row-between">
+        <div>
+          <h2>Make this year yours</h2>
+          <p class="muted">Four quick questions tailor the annual cycle to your goals — what to peak for, what comes first, weak points, and how much engine to keep.</p>
+        </div>
+        <button class="btn primary" data-action="open-wizard">Build my plan</button>
+      </div>
+    </div>`
+    }
+
     <div class="card phase-banner">
       <div class="row-between"><h2>Q${pos.quarter + 1} · ${q.name} block</h2>${phaseBadge(pos)}</div>
       <p class="muted">${q.focus}</p>
       <p class="muted small">Year ${pos.year + 1} · Mesocycle ${pos.meso + 1} of 3 · Week ${pos.weekInMeso + 1} of 4 · Plan week ${pos.weekIdx + 1} of 48</p>
       <div class="bar"><div class="bar-fill" style="width:${((pos.weekIdx + 1) / 48) * 100}%"></div></div>
+      ${state.planConfig ? `<p class="muted small plan-line">Your plan: ${planSummary()} <button class="link-btn" data-action="open-wizard">Retune</button></p>` : ""}
     </div>
 
     <h2 class="cat-head">Annual plan</h2>
@@ -251,6 +304,108 @@ function renderTrain() {
     <div class="card">
       ${history ? `<ul class="plain history">${history}</ul>` : `<p class="muted">No workouts logged yet.</p>`}
     </div>`;
+}
+
+// ---------- Plan Builder wizard ----------
+
+const WIZ_STEPS = [
+  {
+    key: "peak",
+    q: "What should this training year build toward?",
+    hint: "This decides whether the year rotates backward from a peak or just cycles steadily.",
+    opts: [
+      { k: "summer", t: "Summer physique peak", d: "Be leanest and most muscular for summer. The year rotates so a Summer Lean block ends nearest July 1 — hypertrophy and strength run through fall, winter, and spring." },
+      { k: "strength", t: "A strength milestone", d: "Build all year toward big numbers — a Peak & Test block caps the year, and you test new maxes in its final build week." },
+      { k: "steady", t: "No deadline — steady cycle", d: "Rotate through blocks continuously for steady progress. You can retune any time if an event shows up." },
+    ],
+  },
+  {
+    key: "priority",
+    q: "If you could only make one kind of progress this year, which?",
+    hint: "Everything still gets trained — this decides which block types fill the four quarters.",
+    opts: [
+      { k: "size", t: "Muscle size", d: "Two hypertrophy blocks per year; strength work supports the building." },
+      { k: "strength", t: "Strength numbers", d: "Strength and peaking get the most weeks; size work serves the lifts." },
+      { k: "athletic", t: "Lean & athletic", d: "Balanced blocks including a lean phase — look and feel athletic year-round." },
+      { k: "both", t: "50/50 size & strength", d: "Classic powerbuilding rotation through all four block types." },
+    ],
+  },
+  {
+    key: "weakPoints",
+    q: "Weak points to attack with extra volume?",
+    hint: "Pick any or none. Matching accessories get +1 set on build weeks (max 2 exercises per day, main lifts excluded).",
+    multi: true,
+    opts: [
+      { k: "chestArms", t: "Chest & arms", d: "The classic CrossFit gap — extra direct sets on pressing isolation, curls, and triceps work." },
+      { k: "back", t: "Back width & lats", d: "Extra rowing and pulldown volume for the V-taper." },
+      { k: "shoulders", t: "Shoulders", d: "More side-delt and rear-delt sets for the broad look." },
+      { k: "legs", t: "Legs", d: "Extra quad, hamstring, and calf volume." },
+    ],
+  },
+  {
+    key: "conditioning",
+    q: "How should conditioning live inside the year?",
+    hint: "You built a real engine in CrossFit — this decides how much of it the plan protects, and when.",
+    opts: [
+      { k: "maintain", t: "Maintain with a minimum dose", d: "Finishers stay as programmed (2-3 per week). Keeps most of the engine while lifting stays the star." },
+      { k: "seasonal", t: "One engine block per year", d: "One quarter where every session ends with a finisher and lifting volume drops to maintenance. Placed away from your peak." },
+      { k: "copriority", t: "Co-priority all year", d: "A finisher every single training day, all year. Bigger engine, slightly slower lifting progress." },
+      { k: "fade", t: "Let it fade", d: "No finishers — full focus on the barbell and physique." },
+    ],
+  },
+];
+
+function openWizard() {
+  const c = state.planConfig || {};
+  wizard = { step: 0, a: { peak: c.peak || null, priority: c.priority || null, weakPoints: [...(c.weakPoints || [])], conditioning: c.conditioning || null } };
+  go("plan");
+}
+
+function renderWizard() {
+  if (!wizard) {
+    openWizard();
+    return "";
+  }
+  const step = WIZ_STEPS[wizard.step];
+  const a = wizard.a[step.key];
+  const isAnswered = step.multi ? true : !!a;
+  const last = wizard.step === WIZ_STEPS.length - 1;
+
+  const opts = step.opts
+    .map((o) => {
+      const sel = step.multi ? wizard.a[step.key].includes(o.k) : a === o.k;
+      return `
+      <button class="opt-card ${sel ? "selected" : ""}" data-wiz-opt="${o.k}">
+        <strong>${o.t}</strong>
+        <span class="muted small">${o.d}</span>
+      </button>`;
+    })
+    .join("");
+
+  return `
+    <h1>Plan Builder</h1>
+    <div class="wiz-progress">${WIZ_STEPS.map((s, i) => `<span class="wiz-dot ${i === wizard.step ? "active" : i < wizard.step ? "done" : ""}"></span>`).join("")} <span class="muted small">Step ${wizard.step + 1} of ${WIZ_STEPS.length}</span></div>
+    <div class="card">
+      <h2>${step.q}</h2>
+      <p class="muted small">${step.hint}</p>
+      <div class="opt-list">${opts}</div>
+    </div>
+    <div class="actions">
+      ${wizard.step > 0 ? `<button class="btn" data-action="wiz-back">‹ Back</button>` : ""}
+      ${last
+        ? `<button class="btn primary" data-action="wiz-finish" ${isAnswered ? "" : "disabled"}>Build my year</button>`
+        : `<button class="btn primary" data-action="wiz-next" ${isAnswered ? "" : "disabled"}>Next ›</button>`}
+      <button class="btn" data-action="wiz-cancel">Cancel</button>
+    </div>`;
+}
+
+function finishWizard() {
+  state.planConfig = { ...wizard.a };
+  state.planQuarters = generateQuarters(state.planConfig, state.planStart);
+  saveState();
+  wizard = null;
+  trainWeekOffset = 0;
+  go("train");
 }
 
 // ---------- workout editor ----------
@@ -364,7 +519,7 @@ function resetEditDay() {
 function startWorkout(dayIndex) {
   const p = state.profile;
   const pos = planPos(0);
-  const program = weekProgram(baseTemplate(), pos, p.conditioning);
+  const program = weekProgram(baseTemplate(), pos, planOpts());
   const day = program[dayIndex];
   session = {
     day: day.day,
@@ -689,10 +844,16 @@ function saveProfile() {
     const v = parseFloat(document.getElementById("max-" + l.replace(/[^a-z]/gi, "-")).value);
     if (v > 0) maxes[l] = v;
   });
+  const firstTime = !state.profile;
   state.profile = profile;
   state.maxes = maxes;
   saveState();
-  go("today");
+  if (firstTime && !state.planConfig) {
+    render(); // ensures planStart is anchored before the wizard uses it
+    openWizard();
+  } else {
+    go("today");
+  }
 }
 
 function exportBackup() {
@@ -731,7 +892,7 @@ function importBackup() {
 
 document.addEventListener("click", (e) => {
   const t = e.target.closest(
-    "[data-go],[data-start],[data-action],[data-add-food],[data-del-food],[data-week],[data-edit-day],[data-move],[data-rm-ex]"
+    "[data-go],[data-start],[data-action],[data-add-food],[data-del-food],[data-week],[data-edit-day],[data-move],[data-rm-ex],[data-wiz-opt]"
   );
   if (!t) return;
   if (t.dataset.go) {
@@ -764,7 +925,30 @@ document.addEventListener("click", (e) => {
       go("train");
     }
   } else if (t.dataset.action === "save-profile") saveProfile();
-  else if (t.dataset.action === "save-custom-food") saveCustomFood();
+  else if (t.dataset.action === "open-wizard") openWizard();
+  else if (t.dataset.wizOpt !== undefined) {
+    const step = WIZ_STEPS[wizard.step];
+    if (step.multi) {
+      const arr = wizard.a[step.key];
+      const i = arr.indexOf(t.dataset.wizOpt);
+      if (i >= 0) arr.splice(i, 1);
+      else arr.push(t.dataset.wizOpt);
+    } else {
+      wizard.a[step.key] = t.dataset.wizOpt;
+    }
+    render();
+  } else if (t.dataset.action === "wiz-next") {
+    wizard.step++;
+    render();
+    window.scrollTo(0, 0);
+  } else if (t.dataset.action === "wiz-back") {
+    wizard.step--;
+    render();
+  } else if (t.dataset.action === "wiz-finish") finishWizard();
+  else if (t.dataset.action === "wiz-cancel") {
+    wizard = null;
+    go("train");
+  } else if (t.dataset.action === "save-custom-food") saveCustomFood();
   else if (t.dataset.action === "add-exercise") {
     const input = document.getElementById("add-ex-name");
     const name = input.value.trim();
@@ -783,8 +967,10 @@ document.addEventListener("click", (e) => {
       render();
     }
   } else if (t.dataset.action === "restart-plan") {
-    if (confirm("Restart the annual plan? This week becomes Year 1, Quarter 1 (Foundation), Week 1.")) {
+    if (confirm("Restart the annual plan? This week becomes Year 1, Quarter 1, Week 1.")) {
       state.planStart = isoOf(mondayOf(new Date()));
+      // re-anchor the tailored year so peak blocks still land on the calendar
+      if (state.planConfig) state.planQuarters = generateQuarters(state.planConfig, state.planStart);
       saveState();
       render();
     }
