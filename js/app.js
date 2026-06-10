@@ -21,6 +21,7 @@ function loadState() {
   // backfill fields added after v1
   if (!s.customPrograms) s.customPrograms = {};
   if (!s.planStart) s.planStart = null;
+  if (!s.maxes) s.maxes = {};
   return s;
 }
 
@@ -138,6 +139,7 @@ function renderToday() {
 
   return `
     <h1>Today</h1>
+    <div class="grid-2">
     <div class="card">
       <div class="row-between"><h2>Training</h2>${phaseBadge(pos)}</div>
       <p class="muted small">${q.name} block · Mesocycle ${pos.meso + 1} of 3 · ${done} of ${p.daysPerWeek} sessions this week</p>
@@ -153,6 +155,7 @@ function renderToday() {
       ${macroBar("Carbs", totals.c, targets.c, "g")}
       ${macroBar("Fat", totals.f, targets.f, "g")}
       <button class="btn" data-go="eat">Log food</button>
+    </div>
     </div>`;
 }
 
@@ -189,7 +192,13 @@ function renderTrain() {
           </div>
         </div>
         <ul class="plain">
-          ${d.blocks.map((b) => `<li>${esc(b.name)} — <strong>${b.sets} x ${b.lo === b.hi ? b.lo : b.lo + "-" + b.hi}</strong>${b.note ? ` <span class="muted small">(${esc(b.note)})</span>` : ""}</li>`).join("")}
+          ${d.blocks
+            .map((b) => {
+              const mx = maxFor(b.name, state.maxes);
+              const load = mx ? prescribedLoad(mx, b, pos.isDeload) : null;
+              return `<li>${esc(b.name)} — <strong>${b.sets} x ${b.lo === b.hi ? b.lo : b.lo + "-" + b.hi}</strong>${load ? ` <span class="load">@ ${load.weight} lb · ${load.pct}%</span>` : ""}${b.note ? ` <span class="muted small">(${esc(b.note)})</span>` : ""}</li>`;
+            })
+            .join("")}
         </ul>
         ${d.finisher ? `<p class="finisher">Finisher: ${esc(d.finisher)}</p>` : ""}
       </div>`
@@ -354,17 +363,23 @@ function resetEditDay() {
 
 function startWorkout(dayIndex) {
   const p = state.profile;
-  const program = weekProgram(baseTemplate(), planPos(0), p.conditioning);
+  const pos = planPos(0);
+  const program = weekProgram(baseTemplate(), pos, p.conditioning);
   const day = program[dayIndex];
   session = {
     day: day.day,
     finisher: day.finisher,
     blocks: day.blocks.map((b) => {
       const sug = suggestNext(state.workouts, b);
+      const mx = maxFor(b.name, state.maxes);
+      const pres = mx ? prescribedLoad(mx, b, pos.isDeload) : null;
+      const prefill = sug ? sug.weight : pres ? pres.weight : "";
       return {
         ...b,
         suggestion: sug,
-        setLogs: Array.from({ length: b.sets }, () => ({ weight: sug ? sug.weight : "", reps: "" })),
+        prescribed: pres,
+        max: mx,
+        setLogs: Array.from({ length: b.sets }, () => ({ weight: prefill, reps: "" })),
       };
     }),
   };
@@ -379,7 +394,8 @@ function renderLog() {
       <div class="card">
         <h3>${esc(b.name)}</h3>
         <p class="muted small">${b.sets} sets x ${b.lo === b.hi ? b.lo : b.lo + "-" + b.hi} reps${b.note ? ` — ${esc(b.note)}` : ""}</p>
-        ${b.suggestion ? `<p class="suggest">${b.suggestion.msg}</p>` : `<p class="muted small">First time logging this — pick a weight you can control for ${b.hi} reps.</p>`}
+        ${b.prescribed ? `<p class="suggest">Target: ${b.prescribed.weight} lb — ${b.prescribed.pct}% of your ${b.max} lb max</p>` : ""}
+        ${b.suggestion ? `<p class="suggest">${b.suggestion.msg}</p>` : b.prescribed ? "" : `<p class="muted small">First time logging this — pick a weight you can control for ${b.hi} reps.</p>`}
         <div class="sets">
           ${b.setLogs
             .map(
@@ -448,6 +464,7 @@ function renderEat() {
 
   return `
     <h1>Eat</h1>
+    <div class="grid-2">
     <div class="card">
       <h2>Today vs targets</h2>
       ${macroBar("Calories", totals.cal, targets.cal, "kcal")}
@@ -517,6 +534,7 @@ function renderEat() {
               .join("")
           : `<p class="muted">You're at your targets — nice work.</p>`
       }
+    </div>
     </div>`;
 }
 
@@ -561,6 +579,7 @@ function renderLearn() {
     .map(
       (cat) => `
       <h2 class="cat-head">${cat}</h2>
+      <div class="grid-learn">
       ${KNOWLEDGE.filter((k) => k.cat === cat)
         .map(
           (k) => `
@@ -571,7 +590,8 @@ function renderLearn() {
           <p class="links">${k.links.map((l) => `<a href="${l.url}" target="_blank" rel="noopener">${l.label} ↗</a>`).join("<br>")}</p>
         </details>`
         )
-        .join("")}`
+        .join("")}
+      </div>`
     )
     .join("");
 
@@ -622,8 +642,15 @@ function renderProfile() {
         </label>
         <label class="check"><input id="p-conditioning" type="checkbox" ${p.conditioning ? "checked" : ""}> Include conditioning finishers</label>
       </div>
-      <button class="btn primary" data-action="save-profile">${firstTime ? "Create my plan" : "Save changes"}</button>
     </div>
+    <div class="card">
+      <h2>1-rep maxes (lb)</h2>
+      <p class="muted small">Optional but recommended — with these filled in, every main lift shows a percentage-based working weight that adjusts to each training block (and drops to 60% on deload weeks). No true 1RM? Estimate from a recent hard set: weight × (1 + reps ÷ 30).</p>
+      <div class="form-grid maxes">
+        ${MAX_LIFTS.map((l) => `<label>${l} <input id="max-${l.replace(/[^a-z]/gi, "-")}" type="number" inputmode="decimal" placeholder="—" value="${state.maxes[l] || ""}"></label>`).join("")}
+      </div>
+    </div>
+    <button class="btn primary big" data-action="save-profile">${firstTime ? "Create my plan" : "Save changes"}</button>
     ${
       firstTime
         ? ""
@@ -657,7 +684,13 @@ function saveProfile() {
     daysPerWeek: parseInt(document.getElementById("p-days").value, 10),
     conditioning: document.getElementById("p-conditioning").checked,
   };
+  const maxes = {};
+  MAX_LIFTS.forEach((l) => {
+    const v = parseFloat(document.getElementById("max-" + l.replace(/[^a-z]/gi, "-")).value);
+    if (v > 0) maxes[l] = v;
+  });
   state.profile = profile;
+  state.maxes = maxes;
   saveState();
   go("today");
 }

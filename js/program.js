@@ -373,6 +373,37 @@ function weekProgram(template, pos, includeConditioning) {
   }));
 }
 
+// ---------- 1RM percentage loading ----------
+
+// Lifts the user can record a 1-rep max for in Profile.
+const MAX_LIFTS = [
+  "Back Squat",
+  "Front Squat",
+  "Bench Press",
+  "Incline Bench Press",
+  "Overhead Press",
+  "Deadlift",
+  "Barbell Row",
+];
+
+// Match a workout block to a recorded 1RM. Exact name only, except blocks
+// that list alternatives ("Front Squat or Hack Squat" uses the Front Squat
+// max) — deliberately strict so e.g. a flat-bench max never drives incline.
+function maxFor(name, maxes) {
+  if (!maxes) return null;
+  if (maxes[name]) return maxes[name];
+  const first = name.split(" or ")[0].trim();
+  return maxes[first] || null;
+}
+
+// Working weight from %1RM via inverted Epley, targeting the top of the
+// block's rep range with ~1 rep in reserve. 3-5 reps -> ~83%, 6-8 -> ~77%,
+// 8-12 -> ~70%. Deload weeks drop to a flat 60%. Rounded to 5 lb.
+function prescribedLoad(max, block, isDeload) {
+  const pct = isDeload ? 0.6 : 1 / (1 + (block.hi + 1) / 30);
+  return { weight: Math.max(5, Math.round((max * pct) / 5) * 5), pct: Math.round(pct * 100) };
+}
+
 // ---------- progression ----------
 
 // Find the most recent logged performance of an exercise.
