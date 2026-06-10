@@ -4,7 +4,7 @@ A zero-dependency, fully static web app for planning workouts, tracking macros, 
 
 ## Features
 
-- **Train** — auto-generated weekly split (3/4/5/6 days) blending strength + hypertrophy, with optional conditioning finishers. Logs every set and suggests when to add weight (double progression).
+- **Train** — a periodized annual plan (48-week macrocycle: 4 quarterly blocks → 3 monthly mesocycles each → 3 build weeks + 1 deload) presented as a dashboard: phase banner, annual breakout, and a browsable week grid showing every workout at once. Rep schemes shift automatically per block (Foundation → Strength → Hypertrophy → Peak & Test). Every day is fully customizable — add/remove/reorder exercises, change sets/reps, rename days, edit finishers — and edits carry through the whole year. Logs every set and suggests when to add weight (double progression).
 - **Eat** — calorie/macro targets from your stats (Mifflin-St Jeor TDEE), a built-in food database plus custom foods, daily logging, and snack/meal suggestions matched to your *remaining* macros.
 - **Learn** — curated evidence-based topic summaries with links to the research, plus saved PubMed searches (sorted newest-first) to keep up with new studies.
 - **Profile** — stats, goals, split settings, and JSON export/import for backups.

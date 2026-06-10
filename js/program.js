@@ -1,12 +1,60 @@
-// Workout program templates + generator + progression logic.
-// Rep schemes blend strength (heavy main lifts, low reps) with hypertrophy
-// (moderate-rep accessories), matching goals: build muscle + get stronger.
-// inc = suggested weight increment (lb) once you hit the top of the rep range
-// on every set. Lower-body/compound pulls progress faster than upper-body.
+// Periodized program engine: a 48-week annual plan (Mayhem-style breakouts)
+// built from quarterly blocks -> monthly mesocycles -> weekly microcycles.
+//
+//   Year (48 wk) = 4 quarters x 12 wk
+//   Quarter      = 3 mesocycles x 4 wk
+//   Mesocycle    = 3 build weeks + 1 deload week
+//
+// Each quarter is a training block that re-shapes the same weekly split:
+// rep ranges on main lifts and accessories shift with the block's focus.
+// User customizations (js/app.js editor) modify the BASE template; block
+// adjustments are applied on top, so edits survive across the whole year.
+//
+// inc = suggested weight increment (lb) once you hit the top of the rep
+// range on every set (double progression).
 
 function ex(name, sets, lo, hi, inc, note) {
   return { name, sets, lo, hi, inc, note: note || "" };
 }
+
+const WEEKS_PER_MESO = 4;
+const MESOS_PER_QUARTER = 3;
+const WEEKS_PER_QUARTER = WEEKS_PER_MESO * MESOS_PER_QUARTER; // 12
+const WEEKS_PER_YEAR = WEEKS_PER_QUARTER * 4; // 48
+
+// main: rep range applied to heavy compound lifts during the block
+// accShift: added to accessory rep ranges
+// setMult: scales set counts (volume emphasis up/down)
+const QUARTERS = [
+  {
+    name: "Foundation",
+    focus: "Re-groove technique outside the WOD format: moderate loads, strict tempo, build baseline volume.",
+    main: [6, 8],
+    accShift: 2,
+    setMult: 1,
+  },
+  {
+    name: "Strength",
+    focus: "Heavy main lifts at low reps. Accessories get heavier and tighter; volume holds steady.",
+    main: [3, 5],
+    accShift: -2,
+    setMult: 1,
+  },
+  {
+    name: "Hypertrophy",
+    focus: "Volume push for muscle growth: higher reps, an extra accessory set, close to failure.",
+    main: [6, 10],
+    accShift: 3,
+    setMult: 1.15,
+  },
+  {
+    name: "Peak & Test",
+    focus: "Heavy doubles and triples, trimmed accessories. Test new rep maxes in the final build week.",
+    main: [2, 4],
+    accShift: 0,
+    setMult: 0.85,
+  },
+];
 
 const FINISHERS = [
   "Bike: 10 rounds of 30s hard / 60s easy",
@@ -243,11 +291,89 @@ const PROGRAMS = {
   ],
 };
 
-function getProgram(daysPerWeek, includeConditioning) {
-  const days = PROGRAMS[daysPerWeek] || PROGRAMS[4];
-  if (includeConditioning) return days;
-  return days.map((d) => ({ ...d, finisher: undefined }));
+// Extra exercises offered in the customization editor, beyond what the
+// built-in templates already use.
+const EXTRA_EXERCISES = [
+  "Dumbbell Bench Press", "Machine Chest Press", "Pec Deck", "Push-up",
+  "Close-grip Bench Press", "Push Press", "Arnold Press", "Cable Lateral Raise",
+  "T-bar Row", "Pendlay Row", "Chest-supported Row", "Straight-arm Pulldown",
+  "Shrug", "Preacher Curl", "Cable Curl", "Reverse Curl", "Triceps Dip",
+  "Goblet Squat", "Box Squat", "Pause Squat", "Sumo Deadlift", "Good Morning",
+  "Hip Thrust", "Walking Lunge", "Back Extension", "Glute Ham Raise",
+  "Cable Crunch", "Russian Twist", "Farmer Carry",
+];
+
+function exerciseLibrary() {
+  const names = new Set(EXTRA_EXERCISES);
+  Object.values(PROGRAMS).forEach((days) =>
+    days.forEach((d) => d.blocks.forEach((b) => names.add(b.name)))
+  );
+  return [...names].sort();
 }
+
+// ---------- plan position ----------
+
+function mondayOf(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+  return x;
+}
+
+// Where in the 48-week macrocycle a given week sits.
+// offsetWeeks shifts relative to the current week (for browsing the plan).
+function planPositionAt(startISO, offsetWeeks) {
+  const start = mondayOf(new Date(startISO + "T12:00"));
+  const weekStart = mondayOf(new Date());
+  weekStart.setDate(weekStart.getDate() + (offsetWeeks || 0) * 7);
+  let weeks = Math.round((weekStart - start) / (7 * 864e5));
+  if (weeks < 0) weeks = 0;
+  const weekIdx = weeks % WEEKS_PER_YEAR;
+  const weekInMeso = weekIdx % WEEKS_PER_MESO;
+  return {
+    weekStart,
+    year: Math.floor(weeks / WEEKS_PER_YEAR),
+    weekIdx, // 0-47 within the year
+    quarter: Math.floor(weekIdx / WEEKS_PER_QUARTER), // 0-3
+    meso: Math.floor((weekIdx % WEEKS_PER_QUARTER) / WEEKS_PER_MESO), // 0-2
+    weekInMeso, // 0-3
+    isDeload: weekInMeso === WEEKS_PER_MESO - 1,
+  };
+}
+
+// Re-shape a base exercise block for the active quarter + deload status.
+function applyPhase(b, q, isDeload) {
+  const out = { ...b };
+  const isStatic = b.lo === b.hi; // timed holds etc. — leave reps alone
+  const isMain = b.lo <= 6 && b.inc >= 5; // heavy compounds
+  if (!isStatic) {
+    if (isMain) {
+      out.lo = q.main[0];
+      out.hi = q.main[1];
+    } else {
+      out.lo = Math.max(5, b.lo + q.accShift);
+      out.hi = Math.max(8, b.hi + q.accShift);
+    }
+  }
+  out.sets = Math.max(1, Math.round(b.sets * q.setMult));
+  if (isDeload) {
+    out.sets = Math.max(1, Math.ceil(out.sets * 0.5));
+    out.note = (b.note ? b.note + " · " : "") + "deload: ~60% load, 4+ reps in reserve";
+  }
+  return out;
+}
+
+// Build the week's workouts from a base template + plan position.
+function weekProgram(template, pos, includeConditioning) {
+  const q = QUARTERS[pos.quarter];
+  return template.map((d) => ({
+    day: d.day,
+    finisher: includeConditioning ? d.finisher : undefined,
+    blocks: d.blocks.map((b) => applyPhase(b, q, pos.isDeload)),
+  }));
+}
+
+// ---------- progression ----------
 
 // Find the most recent logged performance of an exercise.
 function lastPerformance(workouts, exName) {

@@ -7,15 +7,21 @@ let state = loadState();
 let view = state.profile ? "today" : "profile";
 let session = null; // in-progress workout, not persisted until finished
 let eatSearch = "";
+let trainWeekOffset = 0; // weeks relative to now in the Train dashboard
+let editing = null; // { dayIndex, draft } while customizing a workout day
 
 function loadState() {
+  let s = { profile: null, workouts: [], food: {}, customFoods: [] };
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) s = JSON.parse(raw);
   } catch (e) {
     console.error("Failed to load saved data", e);
   }
-  return { profile: null, workouts: [], food: {}, customFoods: [] };
+  // backfill fields added after v1
+  if (!s.customPrograms) s.customPrograms = {};
+  if (!s.planStart) s.planStart = null;
+  return s;
 }
 
 function saveState() {
@@ -27,12 +33,31 @@ function todayStr() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function isoOf(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function fmtDate(d) {
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 }
 
 function allFoods() {
   return FOODS.concat(state.customFoods);
+}
+
+// The user's base weekly template: their customized version if one exists,
+// otherwise the built-in split for their day count.
+function baseTemplate() {
+  const days = state.profile.daysPerWeek;
+  return state.customPrograms[days] || PROGRAMS[days] || PROGRAMS[4];
+}
+
+function planPos(offset) {
+  return planPositionAt(state.planStart, offset || 0);
 }
 
 // ---------- routing ----------
@@ -52,8 +77,14 @@ function go(v) {
 }
 
 function render() {
+  if (state.profile && !state.planStart) {
+    // anchor the annual plan to the Monday of the first week of use
+    state.planStart = isoOf(mondayOf(new Date()));
+    saveState();
+  }
+  const trainViews = ["train", "log", "edit"];
   const nav = TABS.map(
-    (t) => `<button class="tab ${view === t.id || (view === "log" && t.id === "train") ? "active" : ""}" data-go="${t.id}">${t.label}</button>`
+    (t) => `<button class="tab ${view === t.id || (trainViews.includes(view) && t.id === "train") ? "active" : ""}" data-go="${t.id}">${t.label}</button>`
   ).join("");
   document.getElementById("nav").innerHTML = nav;
 
@@ -62,12 +93,13 @@ function render() {
   if (view === "today") main.innerHTML = renderToday();
   else if (view === "train") main.innerHTML = renderTrain();
   else if (view === "log") main.innerHTML = renderLog();
+  else if (view === "edit") main.innerHTML = renderEditor();
   else if (view === "eat") main.innerHTML = renderEat();
   else if (view === "learn") main.innerHTML = renderLearn();
   else main.innerHTML = renderProfile();
 }
 
-// ---------- Today ----------
+// ---------- shared bits ----------
 
 function macroBar(label, val, target, unit) {
   const pct = Math.min(100, target > 0 ? (val / target) * 100 : 0);
@@ -80,30 +112,38 @@ function macroBar(label, val, target, unit) {
 }
 
 function weekWorkoutCount() {
-  const now = new Date();
-  const day = (now.getDay() + 6) % 7; // Monday = 0
-  const monday = new Date(now);
-  monday.setDate(now.getDate() - day);
-  monday.setHours(0, 0, 0, 0);
+  const monday = mondayOf(new Date());
   return state.workouts.filter((w) => new Date(w.date + "T12:00") >= monday).length;
 }
+
+function phaseBadge(pos) {
+  return pos.isDeload
+    ? `<span class="badge deload-badge">Deload week</span>`
+    : `<span class="badge">Build week ${pos.weekInMeso + 1} of 3</span>`;
+}
+
+// ---------- Today ----------
 
 function renderToday() {
   const p = state.profile;
   const targets = macroTargets(p);
   const totals = dayTotals(state.food[todayStr()] || []);
-  const program = getProgram(p.daysPerWeek, p.conditioning);
+  const pos = planPos(0);
+  const q = QUARTERS[pos.quarter];
+  const program = weekProgram(baseTemplate(), pos, p.conditioning);
   const done = weekWorkoutCount();
-  const nextDay = program[Math.min(done, program.length - 1)];
+  const nextIdx = Math.min(done, program.length - 1);
+  const nextDay = program[nextIdx];
   const lastLog = state.workouts[state.workouts.length - 1];
 
   return `
     <h1>Today</h1>
     <div class="card">
-      <h2>Training</h2>
-      <p class="muted">${done} of ${p.daysPerWeek} sessions logged this week.</p>
+      <div class="row-between"><h2>Training</h2>${phaseBadge(pos)}</div>
+      <p class="muted small">${q.name} block · Mesocycle ${pos.meso + 1} of 3 · ${done} of ${p.daysPerWeek} sessions this week</p>
+      ${pos.isDeload ? `<p class="suggest">Deload week: cut loads to ~60%, stop far from failure, leave feeling fresh.</p>` : ""}
       <p>Up next: <strong>${nextDay.day}</strong> — ${nextDay.blocks.length} exercises${nextDay.finisher ? " + conditioning finisher" : ""}</p>
-      <button class="btn primary" data-start="${program.indexOf(nextDay)}">Start ${nextDay.day}</button>
+      <button class="btn primary" data-start="${nextIdx}">Start ${nextDay.day}</button>
       ${lastLog ? `<p class="muted small">Last session: ${lastLog.day} on ${lastLog.date}</p>` : ""}
     </div>
     <div class="card">
@@ -116,23 +156,42 @@ function renderToday() {
     </div>`;
 }
 
-// ---------- Train ----------
+// ---------- Train dashboard ----------
 
 function renderTrain() {
   const p = state.profile;
-  const program = getProgram(p.daysPerWeek, p.conditioning);
-  const days = program
+  const pos = planPos(trainWeekOffset);
+  const q = QUARTERS[pos.quarter];
+  const week = weekProgram(baseTemplate(), pos, p.conditioning);
+  const isCurrentWeek = trainWeekOffset === 0;
+  const customized = !!state.customPrograms[p.daysPerWeek];
+
+  const quarterCards = QUARTERS.map((qq, i) => {
+    const current = i === pos.quarter;
+    return `
+      <div class="q-card ${current ? "current" : ""}">
+        <div class="row-between"><strong>Q${i + 1} · ${qq.name}</strong>${current ? `<span class="badge">now</span>` : ""}</div>
+        <p class="small muted">${qq.focus}</p>
+        <p class="small">Weeks ${i * 12 + 1}–${i * 12 + 12} · 3 mesocycles (3 build + 1 deload each)</p>
+        ${current ? `<div class="meso-dots">${[0, 1, 2].map((m) => `<span class="dot ${m < pos.meso ? "done" : m === pos.meso ? "active" : ""}">M${m + 1}</span>`).join("")}</div>` : ""}
+      </div>`;
+  }).join("");
+
+  const dayCards = week
     .map(
       (d, i) => `
-      <div class="card">
+      <div class="card day-card">
         <div class="row-between">
-          <h2>${d.day}</h2>
-          <button class="btn primary" data-start="${i}">Start</button>
+          <h3>${esc(d.day)}</h3>
+          <div class="actions tight">
+            <button class="btn small-btn" data-edit-day="${i}">Edit</button>
+            ${isCurrentWeek ? `<button class="btn primary small-btn" data-start="${i}">Start</button>` : ""}
+          </div>
         </div>
         <ul class="plain">
-          ${d.blocks.map((b) => `<li>${b.name} — ${b.sets} x ${b.lo === b.hi ? b.lo : b.lo + "-" + b.hi}${b.note ? ` <span class="muted">(${b.note})</span>` : ""}</li>`).join("")}
+          ${d.blocks.map((b) => `<li>${esc(b.name)} — <strong>${b.sets} x ${b.lo === b.hi ? b.lo : b.lo + "-" + b.hi}</strong>${b.note ? ` <span class="muted small">(${esc(b.note)})</span>` : ""}</li>`).join("")}
         </ul>
-        ${d.finisher ? `<p class="finisher">Finisher: ${d.finisher}</p>` : ""}
+        ${d.finisher ? `<p class="finisher">Finisher: ${esc(d.finisher)}</p>` : ""}
       </div>`
     )
     .join("");
@@ -146,26 +205,156 @@ function renderTrain() {
         .slice(0, 3)
         .map((e) => {
           const top = e.sets.reduce((a, s) => ((s.weight || 0) > (a.weight || 0) ? s : a), {});
-          return `${e.name} ${top.weight || 0}x${top.reps || 0}`;
+          return `${esc(e.name)} ${top.weight || 0}x${top.reps || 0}`;
         })
         .join(" · ");
-      return `<li><strong>${w.date}</strong> — ${w.day}${best ? `<br><span class="muted small">${best}</span>` : ""}</li>`;
+      return `<li><strong>${w.date}</strong> — ${esc(w.day)}${best ? `<br><span class="muted small">${best}</span>` : ""}</li>`;
     })
     .join("");
 
   return `
     <h1>Train</h1>
-    <p class="muted">${p.daysPerWeek}-day split${p.conditioning ? " with conditioning finishers" : ""}. Change it in Profile.</p>
-    ${days}
+
+    <div class="card phase-banner">
+      <div class="row-between"><h2>Q${pos.quarter + 1} · ${q.name} block</h2>${phaseBadge(pos)}</div>
+      <p class="muted">${q.focus}</p>
+      <p class="muted small">Year ${pos.year + 1} · Mesocycle ${pos.meso + 1} of 3 · Week ${pos.weekInMeso + 1} of 4 · Plan week ${pos.weekIdx + 1} of 48</p>
+      <div class="bar"><div class="bar-fill" style="width:${((pos.weekIdx + 1) / 48) * 100}%"></div></div>
+    </div>
+
+    <h2 class="cat-head">Annual plan</h2>
+    <div class="quarters">${quarterCards}</div>
+
+    <h2 class="cat-head">Workouts</h2>
+    <div class="week-nav">
+      <button class="btn small-btn" data-week="-1">‹ Prev</button>
+      <div class="week-label">
+        <strong>Week of ${fmtDate(pos.weekStart)}</strong>${isCurrentWeek ? " (this week)" : ""}<br>
+        <span class="muted small">${q.name} · ${pos.isDeload ? "Deload" : `Build ${pos.weekInMeso + 1}/3`} · rep ranges adjust per block</span>
+      </div>
+      ${isCurrentWeek ? "" : `<button class="btn small-btn" data-week="reset">Today</button>`}
+      <button class="btn small-btn" data-week="1">Next ›</button>
+    </div>
+    <div class="grid-2">${dayCards}</div>
+    <p class="muted small">${customized ? `Using your customized ${p.daysPerWeek}-day program. <button class="link-btn" data-action="reset-program">Reset all days to default</button>` : `Tap Edit on any day to customize its exercises — edits carry through every block of the year.`}</p>
+
+    <h2 class="cat-head">History</h2>
     <div class="card">
-      <h2>History</h2>
       ${history ? `<ul class="plain history">${history}</ul>` : `<p class="muted">No workouts logged yet.</p>`}
     </div>`;
 }
 
+// ---------- workout editor ----------
+
+function startEdit(dayIndex) {
+  const tmpl = baseTemplate();
+  const d = tmpl[dayIndex];
+  editing = {
+    dayIndex,
+    draft: {
+      day: d.day,
+      finisher: d.finisher || "",
+      blocks: d.blocks.map((b) => ({ ...b })),
+    },
+  };
+  go("edit");
+}
+
+function renderEditor() {
+  if (!editing) return renderTrain();
+  const d = editing.draft;
+  const rows = d.blocks
+    .map(
+      (b, i) => `
+      <div class="edit-row">
+        <input class="ex-name" value="${esc(b.name)}" data-edit="${i}:name" placeholder="Exercise">
+        <div class="edit-nums">
+          <label>Sets <input type="number" inputmode="numeric" value="${b.sets}" data-edit="${i}:sets"></label>
+          <label>Reps <input type="number" inputmode="numeric" value="${b.lo}" data-edit="${i}:lo"></label>
+          <label>to <input type="number" inputmode="numeric" value="${b.hi}" data-edit="${i}:hi"></label>
+          <label>+lb <input type="number" inputmode="decimal" value="${b.inc}" data-edit="${i}:inc"></label>
+        </div>
+        <div class="edit-btns">
+          <button class="btn small-btn" data-move="${i}:-1" ${i === 0 ? "disabled" : ""}>↑</button>
+          <button class="btn small-btn" data-move="${i}:1" ${i === d.blocks.length - 1 ? "disabled" : ""}>↓</button>
+          <button class="btn danger small-btn" data-rm-ex="${i}">✕</button>
+        </div>
+      </div>`
+    )
+    .join("");
+
+  return `
+    <h1>Edit workout</h1>
+    <div class="card">
+      <label class="field-label">Day name <input id="ed-day" value="${esc(d.day)}"></label>
+      <p class="muted small">Set the base rep ranges here — each quarterly block (Foundation, Strength, Hypertrophy, Peak) adjusts them automatically, and deload weeks halve the sets. "+lb" is the jump when you top the rep range on all sets.</p>
+      ${rows}
+      <div class="edit-add">
+        <input id="add-ex-name" list="exlib" placeholder="Add exercise (pick or type your own)">
+        <datalist id="exlib">${exerciseLibrary().map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
+        <button class="btn" data-action="add-exercise">Add</button>
+      </div>
+      <label class="field-label">Conditioning finisher (blank for none)
+        <input id="ed-finisher" value="${esc(d.finisher)}" placeholder="e.g. Row: 5 x 500m, 90s rest">
+      </label>
+    </div>
+    <div class="actions">
+      <button class="btn primary" data-action="save-edit">Save day</button>
+      <button class="btn" data-action="cancel-edit">Cancel</button>
+      <button class="btn danger" data-action="reset-day">Reset this day to default</button>
+    </div>`;
+}
+
+function saveEdit() {
+  const d = editing.draft;
+  d.day = document.getElementById("ed-day").value.trim() || d.day;
+  d.finisher = document.getElementById("ed-finisher").value.trim();
+  const blocks = d.blocks
+    .map((b) => ({
+      name: String(b.name).trim(),
+      sets: Math.max(1, parseInt(b.sets, 10) || 3),
+      lo: Math.max(1, parseInt(b.lo, 10) || 8),
+      hi: Math.max(1, parseInt(b.hi, 10) || 12),
+      inc: parseFloat(b.inc) || 0,
+      note: b.note || "",
+    }))
+    .filter((b) => b.name);
+  if (!blocks.length) {
+    alert("A workout needs at least one exercise.");
+    return;
+  }
+  blocks.forEach((b) => {
+    if (b.hi < b.lo) b.hi = b.lo;
+  });
+  const days = state.profile.daysPerWeek;
+  const tmpl = (state.customPrograms[days] || PROGRAMS[days]).map((day) => ({
+    day: day.day,
+    finisher: day.finisher,
+    blocks: day.blocks.map((b) => ({ ...b })),
+  }));
+  tmpl[editing.dayIndex] = { day: d.day, finisher: d.finisher || undefined, blocks };
+  state.customPrograms[days] = tmpl;
+  saveState();
+  editing = null;
+  go("train");
+}
+
+function resetEditDay() {
+  const days = state.profile.daysPerWeek;
+  const def = PROGRAMS[days][editing.dayIndex];
+  editing.draft = {
+    day: def.day,
+    finisher: def.finisher || "",
+    blocks: def.blocks.map((b) => ({ ...b })),
+  };
+  render();
+}
+
+// ---------- workout logging ----------
+
 function startWorkout(dayIndex) {
   const p = state.profile;
-  const program = getProgram(p.daysPerWeek, p.conditioning);
+  const program = weekProgram(baseTemplate(), planPos(0), p.conditioning);
   const day = program[dayIndex];
   session = {
     day: day.day,
@@ -188,8 +377,8 @@ function renderLog() {
     .map(
       (b, bi) => `
       <div class="card">
-        <h3>${b.name}</h3>
-        <p class="muted small">${b.sets} sets x ${b.lo === b.hi ? b.lo : b.lo + "-" + b.hi} reps${b.note ? ` — ${b.note}` : ""}</p>
+        <h3>${esc(b.name)}</h3>
+        <p class="muted small">${b.sets} sets x ${b.lo === b.hi ? b.lo : b.lo + "-" + b.hi} reps${b.note ? ` — ${esc(b.note)}` : ""}</p>
         ${b.suggestion ? `<p class="suggest">${b.suggestion.msg}</p>` : `<p class="muted small">First time logging this — pick a weight you can control for ${b.hi} reps.</p>`}
         <div class="sets">
           ${b.setLogs
@@ -209,9 +398,9 @@ function renderLog() {
     .join("");
 
   return `
-    <h1>${session.day}</h1>
+    <h1>${esc(session.day)}</h1>
     ${blocks}
-    ${session.finisher ? `<div class="card"><h3>Finisher</h3><p>${session.finisher}</p></div>` : ""}
+    ${session.finisher ? `<div class="card"><h3>Finisher</h3><p>${esc(session.finisher)}</p></div>` : ""}
     <div class="actions">
       <button class="btn primary" data-action="finish-workout">Finish & save</button>
       <button class="btn" data-action="cancel-workout">Discard</button>
@@ -404,7 +593,7 @@ function renderProfile() {
   const firstTime = !state.profile;
   return `
     <h1>${firstTime ? "Welcome — set up your profile" : "Profile"}</h1>
-    ${firstTime ? `<p class="muted">Everything is computed from this: your training split, calories, and macros. Data stays in this browser.</p>` : ""}
+    ${firstTime ? `<p class="muted">Everything is computed from this: your training plan, calories, and macros. Data stays in this browser.</p>` : ""}
     <div class="card">
       <div class="form-grid">
         <label>Sex
@@ -439,6 +628,11 @@ function renderProfile() {
       firstTime
         ? ""
         : `
+    <div class="card">
+      <h2>Annual plan</h2>
+      <p class="muted small">Plan started the week of ${state.planStart}. Restarting begins Year 1, Quarter 1 (Foundation) from this week.</p>
+      <button class="btn" data-action="restart-plan">Restart plan from this week</button>
+    </div>
     <div class="card">
       <h2>Your data</h2>
       <p class="muted small">${state.workouts.length} workouts and ${Object.keys(state.food).length} days of food logged. Data lives only in this browser — export a backup occasionally.</p>
@@ -488,6 +682,7 @@ function importBackup() {
         const data = JSON.parse(reader.result);
         if (!data || typeof data !== "object" || !("workouts" in data)) throw new Error("bad format");
         state = data;
+        if (!state.customPrograms) state.customPrograms = {};
         saveState();
         go("today");
       } catch (e) {
@@ -502,11 +697,29 @@ function importBackup() {
 // ---------- events ----------
 
 document.addEventListener("click", (e) => {
-  const t = e.target.closest("[data-go],[data-start],[data-action],[data-add-food],[data-del-food]");
+  const t = e.target.closest(
+    "[data-go],[data-start],[data-action],[data-add-food],[data-del-food],[data-week],[data-edit-day],[data-move],[data-rm-ex]"
+  );
   if (!t) return;
-  if (t.dataset.go) go(t.dataset.go);
-  else if (t.dataset.start !== undefined) startWorkout(parseInt(t.dataset.start, 10));
-  else if (t.dataset.addFood) addFood(t.dataset.addFood);
+  if (t.dataset.go) {
+    if (t.dataset.go === "train") trainWeekOffset = 0;
+    go(t.dataset.go);
+  } else if (t.dataset.start !== undefined) startWorkout(parseInt(t.dataset.start, 10));
+  else if (t.dataset.week !== undefined) {
+    if (t.dataset.week === "reset") trainWeekOffset = 0;
+    else trainWeekOffset += parseInt(t.dataset.week, 10);
+    render();
+  } else if (t.dataset.editDay !== undefined) startEdit(parseInt(t.dataset.editDay, 10));
+  else if (t.dataset.move !== undefined) {
+    const [i, dir] = t.dataset.move.split(":").map(Number);
+    const b = editing.draft.blocks;
+    const j = i + dir;
+    if (j >= 0 && j < b.length) [b[i], b[j]] = [b[j], b[i]];
+    render();
+  } else if (t.dataset.rmEx !== undefined) {
+    editing.draft.blocks.splice(parseInt(t.dataset.rmEx, 10), 1);
+    render();
+  } else if (t.dataset.addFood) addFood(t.dataset.addFood);
   else if (t.dataset.delFood !== undefined) {
     state.food[todayStr()].splice(parseInt(t.dataset.delFood, 10), 1);
     saveState();
@@ -519,13 +732,37 @@ document.addEventListener("click", (e) => {
     }
   } else if (t.dataset.action === "save-profile") saveProfile();
   else if (t.dataset.action === "save-custom-food") saveCustomFood();
-  else if (t.dataset.action === "export") exportBackup();
+  else if (t.dataset.action === "add-exercise") {
+    const input = document.getElementById("add-ex-name");
+    const name = input.value.trim();
+    if (!name) return;
+    editing.draft.blocks.push({ name, sets: 3, lo: 8, hi: 12, inc: 5, note: "" });
+    render();
+  } else if (t.dataset.action === "save-edit") saveEdit();
+  else if (t.dataset.action === "cancel-edit") {
+    editing = null;
+    go("train");
+  } else if (t.dataset.action === "reset-day") resetEditDay();
+  else if (t.dataset.action === "reset-program") {
+    if (confirm("Reset every day of your program back to the built-in template?")) {
+      delete state.customPrograms[state.profile.daysPerWeek];
+      saveState();
+      render();
+    }
+  } else if (t.dataset.action === "restart-plan") {
+    if (confirm("Restart the annual plan? This week becomes Year 1, Quarter 1 (Foundation), Week 1.")) {
+      state.planStart = isoOf(mondayOf(new Date()));
+      saveState();
+      render();
+    }
+  } else if (t.dataset.action === "export") exportBackup();
   else if (t.dataset.action === "import") importBackup();
   else if (t.dataset.action === "reset") {
-    if (confirm("Erase ALL data (profile, workouts, food logs)? Export a backup first if unsure.")) {
+    if (confirm("Erase ALL data (profile, workouts, food logs, custom programs)? Export a backup first if unsure.")) {
       localStorage.removeItem(STORE_KEY);
       state = loadState();
       session = null;
+      editing = null;
       go("profile");
     }
   }
@@ -541,6 +778,9 @@ document.addEventListener("input", (e) => {
   } else if (e.target.dataset.set && session) {
     const [bi, si, field] = e.target.dataset.set.split(":");
     session.blocks[bi].setLogs[si][field] = e.target.value;
+  } else if (e.target.dataset.edit && editing) {
+    const [i, field] = e.target.dataset.edit.split(":");
+    editing.draft.blocks[i][field] = e.target.value;
   }
 });
 

@@ -5,7 +5,12 @@
       "Bash(git init *)",
       "Bash(git add *)",
       "Bash(git commit -m 'Personal training & nutrition web app *)",
-      "Bash(gh auth *)"
+      "Bash(gh auth *)",
+      "Bash(gh repo *)",
+      "Bash(gh api *)",
+      "Bash(git commit -q -m 'Periodized annual plan, dashboard Train view, and workout customization *)",
+      "Bash(git push *)",
+      "Bash(curl -s \"https://austincox1123-jpg.github.io/health/js/program.js\")"
     ]
   }
 }
