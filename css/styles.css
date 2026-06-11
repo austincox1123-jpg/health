@@ -253,6 +253,10 @@ details[open] summary { margin-bottom: 8px; }
 
 .day-card { margin-bottom: 0; }
 .day-card ul.plain li { font-size: 14.5px; }
+
+.run-card { border-color: #a5e3ef; background: linear-gradient(180deg, #fdfeff, #effbfd); }
+.run-card h3 { color: #0e7490; }
+.run-desc { margin: 8px 0 0; font-size: 14.5px; }
 .actions.tight { display: flex; gap: 6px; margin: 0; }
 
 .link-btn {

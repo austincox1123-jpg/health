@@ -10,7 +10,8 @@
       "Bash(gh api *)",
       "Bash(git commit -q -m 'Periodized annual plan, dashboard Train view, and workout customization *)",
       "Bash(git push *)",
-      "Bash(curl -s \"https://austincox1123-jpg.github.io/health/js/program.js\")"
+      "Bash(curl -s \"https://austincox1123-jpg.github.io/health/js/program.js\")",
+      "WebSearch"
     ]
   }
 }

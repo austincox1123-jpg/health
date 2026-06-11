@@ -8,16 +8,25 @@ function est1RM(weight, reps) {
   return weight * (1 + Math.min(reps, 15) / 30);
 }
 
-// Best estimated 1RM per session for one exercise: [{date, y}]
+// Best per-session number for one exercise: {points: [{label, y}], unit}.
+// Pure-bodyweight movements (never logged with added load) chart best-set
+// reps; everything else charts estimated 1RM.
 function exerciseTrend(workouts, exName) {
-  const out = [];
-  for (const w of workouts) {
-    const entry = w.entries.find((e) => e.name === exName);
-    if (!entry) continue;
-    const best = Math.max(0, ...entry.sets.map((s) => est1RM(s.weight, s.reps)));
-    if (best > 0) out.push({ label: w.date.slice(5).replace("-", "/"), y: Math.round(best) });
+  const sessions = workouts
+    .map((w) => ({ date: w.date, entry: w.entries.find((e) => e.name === exName) }))
+    .filter((s) => s.entry);
+  const repMode =
+    typeof isBodyweight === "function" &&
+    isBodyweight(exName) &&
+    sessions.every((s) => s.entry.sets.every((x) => !x.weight));
+  const points = [];
+  for (const s of sessions) {
+    const best = repMode
+      ? Math.max(0, ...s.entry.sets.map((x) => x.reps || 0))
+      : Math.max(0, ...s.entry.sets.map((x) => est1RM(x.weight, x.reps)));
+    if (best > 0) points.push({ label: s.date.slice(5).replace("-", "/"), y: Math.round(best) });
   }
-  return out;
+  return { points, unit: repMode ? "reps" : "lb" };
 }
 
 // Exercises with enough sessions to chart, most-logged first.
@@ -116,9 +125,52 @@ function svgRing(value, target, label, color) {
   </div>`;
 }
 
-// Line chart with area fill — used for estimated-1RM trends.
-function svgLine(points, color) {
-  if (points.length < 2) return `<p class="muted small">Log this exercise at least twice to see a trend.</p>`;
+function fmtPace(decMin) {
+  const m = Math.floor(decMin);
+  const s = Math.round((decMin - m) * 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function fmtDuration(decMin) {
+  const m = Math.floor(decMin);
+  const s = Math.round((decMin - m) * 60);
+  return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}:${String(s).padStart(2, "0")}`;
+}
+
+// Total miles per week for the last n weeks: [{label, y}]
+function weeklyMileage(runs, n) {
+  const weeks = [];
+  const cur = mondayOf(new Date());
+  for (let i = n - 1; i >= 0; i--) {
+    const start = new Date(cur);
+    start.setDate(start.getDate() - i * 7);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 7);
+    let mi = 0;
+    for (const r of runs) {
+      const d = new Date(r.date + "T12:00");
+      if (d >= start && d < end) mi += r.miles || 0;
+    }
+    weeks.push({ label: `${start.getMonth() + 1}/${start.getDate()}`, y: Math.round(mi * 10) / 10 });
+  }
+  return weeks;
+}
+
+// Pace per run (decimal min/mi), oldest first: [{label, y}]
+function paceTrend(runs, n) {
+  return runs
+    .filter((r) => r.miles > 0 && r.minutes > 0)
+    .slice(-n)
+    .map((r) => ({ label: r.date.slice(5).replace("-", "/"), y: Math.round((r.minutes / r.miles) * 100) / 100 }));
+}
+
+// Line chart with area fill. opts: {fmtAxis, fmtVal} to format axis ticks
+// and the last-point label (defaults suit pound loads).
+function svgLine(points, color, opts) {
+  opts = opts || {};
+  const fmtAxis = opts.fmtAxis || ((v) => Math.round(v / 5) * 5);
+  const fmtVal = opts.fmtVal || ((v) => v + " lb");
+  if (points.length < 2) return `<p class="muted small">Log this at least twice to see a trend.</p>`;
   const w = 600, h = 190, padL = 44, padR = 14, padT = 16, padB = 26;
   const ys = points.map((p) => p.y);
   let lo = Math.min(...ys), hi = Math.max(...ys);
@@ -131,7 +183,7 @@ function svgLine(points, color) {
   const grid = [0.25, 0.5, 0.75].map((f) => {
     const v = lo + (hi - lo) * f;
     return `<line x1="${padL}" y1="${Y(v)}" x2="${w - padR}" y2="${Y(v)}" class="gridline"/>
-            <text x="${padL - 6}" y="${Y(v) + 4}" text-anchor="end" class="axis">${Math.round(v / 5) * 5}</text>`;
+            <text x="${padL - 6}" y="${Y(v) + 4}" text-anchor="end" class="axis">${fmtAxis(v)}</text>`;
   }).join("");
   const dots = points.map((p, i) => `<circle cx="${X(i)}" cy="${Y(p.y)}" r="3.5" fill="${color}"/>`).join("");
   const last = points[points.length - 1];
@@ -141,7 +193,7 @@ function svgLine(points, color) {
     <polygon points="${X(0)},${h - padB} ${pts} ${X(points.length - 1)},${h - padB}" fill="${color}" opacity="0.08"/>
     <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linejoin="round"/>
     ${dots}
-    <text x="${X(points.length - 1)}" y="${Y(last.y) - 10}" text-anchor="end" class="pt-label">${last.y} lb</text>
+    <text x="${X(points.length - 1)}" y="${Y(last.y) - 10}" text-anchor="end" class="pt-label">${fmtVal(last.y)}</text>
     <text x="${padL}" y="${h - 8}" class="axis">${points[0].label}</text>
     <text x="${w - padR}" y="${h - 8}" text-anchor="end" class="axis">${last.label}</text>
   </svg>`;

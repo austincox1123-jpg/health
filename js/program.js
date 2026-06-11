@@ -165,7 +165,87 @@ const FINISHERS = [
   "EMOM 10 min: 12 cal bike",
   "Jump rope: 8 x 1 min on / 30s off",
   "Sled or farmer carry: 6 x 40m, rest as needed",
+  "Calisthenics circuit: 3 rounds — 15 push-ups, 10 pull-ups, 20 sit-ups",
+  "Burpee EMOM 8 min: 8 burpees on the minute",
 ];
+
+// ---------- calisthenics ----------
+
+// Bodyweight movements log added load (vest/belt) in the weight field, and
+// progress by reps first: top the rep range on every set, then add reps or
+// strap on weight.
+const BW_RE = /push-up|pull-up|chin-up|\bdip\b|dips\b|sit-up|pistol|handstand|inverted row|burpee|muscle-up|bodyweight|plank|leg raise|ab wheel|l-sit|nordic/i;
+
+function isBodyweight(name) {
+  return BW_RE.test(name);
+}
+
+// ---------- running (hybrid lift + run) ----------
+
+// Structured run sessions, periodized like everything else: durations climb
+// through build weeks, shrink on deloads, and the interval flavor follows
+// the quarter's intent.
+const INTERVAL_BY_BLOCK = {
+  foundation: "6 x 800m at 5K effort, 2 min jog rest",
+  hypertrophy: "6 x 800m at 5K effort, 2 min jog rest",
+  strength: "8 x 400m fast, 90s walk rest",
+  peak: "5 x 400m fast, full recovery",
+  lean: "30 min tempo — comfortably hard the whole way",
+  engine: "3 x 1 mile at threshold, 3 min jog rest",
+};
+
+function runWeek(pos, runsPerWeek, quarters) {
+  if (!runsPerWeek) return [];
+  const q = quarters[pos.quarter];
+  const lineup = runsPerWeek >= 3 ? ["easy", "intervals", "long"] : runsPerWeek === 2 ? ["intervals", "long"] : ["long"];
+  const mult = (pos.isDeload ? 0.6 : 1 + pos.weekInMeso * 0.1) * (q.engine ? 1.2 : q.key === "peak" ? 0.8 : 1);
+  return lineup.map((k) => {
+    if (k === "intervals") {
+      return {
+        day: "Run · Intervals",
+        run: true,
+        desc: pos.isDeload
+          ? "20-25 min easy jog (deload — no hard running this week)"
+          : `10 min warm-up · ${INTERVAL_BY_BLOCK[q.key] || INTERVAL_BY_BLOCK.foundation} · 10 min cool-down`,
+      };
+    }
+    const base = k === "long" ? 55 : 35;
+    const min = Math.max(20, Math.round((base * mult) / 5) * 5);
+    return {
+      day: k === "long" ? "Run · Long Run" : "Run · Easy Run",
+      run: true,
+      desc: `${min} min at conversational pace (Zone 2)${k === "long" ? " — steady, finish feeling like you had more" : ""}`,
+    };
+  });
+}
+
+// Interleave runs into the lifting week. Each run gets an evenly-spaced
+// target slot, then nearby slots are scored: never next to another run,
+// hard runs (intervals) avoid following leg days, easy/long runs only
+// mildly mind them. Lowest score wins.
+function mergeWeek(lifts, runs) {
+  if (!runs.length) return lifts;
+  const isLeg = (d) => /lower|legs|full body/i.test(d.day);
+  const sessions = [...lifts];
+  const total = lifts.length + runs.length;
+  runs.forEach((r, i) => {
+    const target = Math.min(Math.round(((i + 1) * total) / (runs.length + 1)), sessions.length);
+    const hard = /intervals/i.test(r.day);
+    let best = target, bestScore = Infinity;
+    for (const cand of [target, target + 1, target - 1, target + 2, target - 2, target + 3, target - 3]) {
+      if (cand < 0 || cand > sessions.length) continue;
+      const prev = sessions[cand - 1];
+      const next = sessions[cand];
+      let score = Math.abs(cand - target) * 0.15;
+      if (prev && prev.run) score += 2;
+      if (next && next.run) score += 2;
+      if (prev && !prev.run && isLeg(prev)) score += hard ? 1 : 0.3;
+      if (score < bestScore) { bestScore = score; best = cand; }
+    }
+    sessions.splice(best, 0, r);
+  });
+  return sessions;
+}
 
 const PROGRAMS = {
   3: [
@@ -403,6 +483,11 @@ const EXTRA_EXERCISES = [
   "Goblet Squat", "Box Squat", "Pause Squat", "Sumo Deadlift", "Good Morning",
   "Hip Thrust", "Walking Lunge", "Back Extension", "Glute Ham Raise",
   "Cable Crunch", "Russian Twist", "Farmer Carry",
+  // calisthenics
+  "Pull-up", "Chin-up", "Wide-grip Pull-up", "Dips", "Diamond Push-up",
+  "Sit-up", "Decline Sit-up", "Pistol Squat", "Bodyweight Squat",
+  "Handstand Push-up", "Inverted Row", "Burpee", "Muscle-up",
+  "L-sit Hold", "Nordic Hamstring Curl",
 ];
 
 function exerciseLibrary() {
@@ -472,7 +557,9 @@ function weekProgram(template, pos, opts) {
   opts = opts || {};
   const quarters = opts.quarters || QUARTERS;
   const q = quarters[pos.quarter];
-  const finishersOn = opts.conditioningMode === "fade" ? false : opts.conditioning !== false;
+  // hybrid mode drops finishers — structured runs replace them
+  const finishersOn =
+    opts.conditioningMode === "fade" || opts.conditioningMode === "hybrid" ? false : opts.conditioning !== false;
   const finisherEveryDay = q.engine || opts.conditioningMode === "copriority";
   return template.map((d, di) => {
     let blocks = d.blocks.map((b) => applyPhase(b, q, pos.isDeload));
@@ -538,14 +625,23 @@ function suggestNext(workouts, block) {
   if (!sets.length) return null;
   const topWeight = Math.max(...sets.map((s) => s.weight || 0));
   const allAtTop = sets.every((s) => (s.reps || 0) >= block.hi);
-  if (block.inc > 0 && allAtTop) {
-    return {
-      weight: topWeight + block.inc,
-      msg: `Hit ${block.hi}+ reps on all sets last time — go up to ${topWeight + block.inc} lb`,
-    };
+  const bw = isBodyweight(block.name);
+  if (allAtTop) {
+    if (bw && topWeight === 0) {
+      return {
+        weight: 0,
+        msg: `Hit ${block.hi}+ reps on all sets — add 1-2 reps per set, or add +${block.inc || 5} lb (vest/belt) and drop back to ${block.lo}`,
+      };
+    }
+    if (block.inc > 0) {
+      return {
+        weight: topWeight + block.inc,
+        msg: `Hit ${block.hi}+ reps on all sets last time — go up to ${topWeight + block.inc} lb${bw ? " added" : ""}`,
+      };
+    }
   }
   return {
     weight: topWeight,
-    msg: `Last: ${sets.map((s) => `${s.weight || 0}x${s.reps || 0}`).join(", ")} (${last.date}) — add reps before weight`,
+    msg: `Last: ${sets.map((s) => `${bw && !s.weight ? "bw" : s.weight || 0}x${s.reps || 0}`).join(", ")} (${last.date}) — add reps before ${bw ? "load" : "weight"}`,
   };
 }

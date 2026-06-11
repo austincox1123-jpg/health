@@ -11,6 +11,7 @@ let trainWeekOffset = 0; // weeks relative to now in the Train dashboard
 let editing = null; // { dayIndex, draft } while customizing a workout day
 let wizard = null; // { step, a: answers } while the Plan Builder is open
 let progressEx = null; // exercise selected in the Progress strength chart
+let runSession = null; // run being logged { day, desc }
 
 function loadState() {
   let s = { profile: null, workouts: [], food: {}, customFoods: [] };
@@ -26,6 +27,7 @@ function loadState() {
   if (!s.maxes) s.maxes = {};
   if (!s.planConfig) s.planConfig = null;
   if (!s.planQuarters) s.planQuarters = null;
+  if (!s.runs) s.runs = [];
   return s;
 }
 
@@ -103,7 +105,7 @@ function render() {
     state.planStart = isoOf(mondayOf(new Date()));
     saveState();
   }
-  const trainViews = ["train", "log", "edit", "plan"];
+  const trainViews = ["train", "log", "edit", "plan", "runlog"];
   const nav = TABS.map(
     (t) => `<button class="tab ${view === t.id || (trainViews.includes(view) && t.id === "train") ? "active" : ""}" data-go="${t.id}">${t.label}</button>`
   ).join("");
@@ -116,6 +118,7 @@ function render() {
   else if (view === "log") main.innerHTML = renderLog();
   else if (view === "edit") main.innerHTML = renderEditor();
   else if (view === "plan") main.innerHTML = renderWizard();
+  else if (view === "runlog") main.innerHTML = renderRunLog();
   else if (view === "progress") main.innerHTML = renderProgress();
   else if (view === "eat") main.innerHTML = renderEat();
   else if (view === "learn") main.innerHTML = renderLearn();
@@ -139,6 +142,11 @@ function weekWorkoutCount() {
   return state.workouts.filter((w) => new Date(w.date + "T12:00") >= monday).length;
 }
 
+function weekRunCount() {
+  const monday = mondayOf(new Date());
+  return state.runs.filter((r) => new Date(r.date + "T12:00") >= monday).length;
+}
+
 function phaseBadge(pos) {
   return pos.isDeload
     ? `<span class="badge deload-badge">Deload week</span>`
@@ -154,7 +162,11 @@ function renderToday() {
   const pos = planPos(0);
   const q = activeQuarters()[pos.quarter];
   const program = weekProgram(baseTemplate(), pos, planOpts());
+  const runs = runWeek(pos, p.runsPerWeek || 0, activeQuarters());
   const done = weekWorkoutCount();
+  const runsDone = weekRunCount();
+  const liftsLeft = done < p.daysPerWeek;
+  const nextRun = !liftsLeft && runs.length && runsDone < runs.length ? runs[Math.min(runsDone, runs.length - 1)] : null;
   const nextIdx = Math.min(done, program.length - 1);
   const nextDay = program[nextIdx];
   const lastLog = state.workouts[state.workouts.length - 1];
@@ -164,12 +176,17 @@ function renderToday() {
     <div class="grid-2">
     <div class="card">
       <div class="row-between"><h2>Training</h2>${phaseBadge(pos)}</div>
-      <p class="muted small">${q.name} block · Mesocycle ${pos.meso + 1} of 3 · ${done} of ${p.daysPerWeek} sessions this week</p>
+      <p class="muted small">${q.name} block · Mesocycle ${pos.meso + 1} of 3 · Lifts ${done}/${p.daysPerWeek}${runs.length ? ` · Runs ${runsDone}/${runs.length}` : ""} this week</p>
       ${pos.isDeload ? `<p class="suggest">Deload week: cut loads to ~60%, stop far from failure, leave feeling fresh.</p>` : ""}
       ${q.lean && !pos.isDeload ? `<p class="suggest">Lean block: pair this with the Cut goal in Profile if you haven't already.</p>` : ""}
       ${q.engine && !pos.isDeload ? `<p class="suggest">Engine block: lifting holds at maintenance — hit every finisher and add 1-2 standalone cardio sessions.</p>` : ""}
-      <p>Up next: <strong>${nextDay.day}</strong> — ${nextDay.blocks.length} exercises${nextDay.finisher ? " + conditioning finisher" : ""}</p>
-      <button class="btn primary" data-start="${nextIdx}">Start ${nextDay.day}</button>
+      ${
+        nextRun
+          ? `<p>Up next: <strong>${nextRun.day}</strong><br><span class="muted small">${nextRun.desc}</span></p>
+      <button class="btn primary" data-run-start="${Math.min(runsDone, runs.length - 1)}">Log run</button>`
+          : `<p>Up next: <strong>${nextDay.day}</strong> — ${nextDay.blocks.length} exercises${nextDay.finisher ? " + conditioning finisher" : ""}</p>
+      <button class="btn primary" data-start="${nextIdx}">Start ${nextDay.day}</button>`
+      }
       ${lastLog ? `<p class="muted small">Last session: ${lastLog.day} on ${lastLog.date}</p>` : ""}
     </div>
     <div class="card">
@@ -185,7 +202,7 @@ function renderToday() {
 const PLAN_LABELS = {
   peak: { summer: "summer physique peak", strength: "strength milestone", steady: "steady year-round cycle" },
   priority: { size: "size first", strength: "strength first", athletic: "lean & athletic", both: "50/50 size & strength" },
-  conditioning: { maintain: "maintain the engine", seasonal: "seasonal engine block", copriority: "engine co-priority", fade: "no conditioning" },
+  conditioning: { maintain: "maintain the engine", hybrid: "hybrid lift + run", seasonal: "seasonal engine block", copriority: "engine co-priority", fade: "no conditioning" },
 };
 
 function planSummary() {
@@ -217,9 +234,26 @@ function renderTrain() {
       </div>`;
   }).join("");
 
-  const dayCards = week
-    .map(
-      (d, i) => `
+  const runs = runWeek(pos, p.runsPerWeek || 0, quarters);
+  const sessions = mergeWeek(week, runs);
+
+  const dayCards = sessions
+    .map((d) => {
+      if (d.run) {
+        const ri = runs.indexOf(d);
+        return `
+      <div class="card day-card run-card">
+        <div class="row-between">
+          <h3>${esc(d.day)}</h3>
+          <div class="actions tight">
+            ${isCurrentWeek ? `<button class="btn primary small-btn" data-run-start="${ri}">Log run</button>` : ""}
+          </div>
+        </div>
+        <p class="run-desc">${esc(d.desc)}</p>
+      </div>`;
+      }
+      const i = week.indexOf(d);
+      return `
       <div class="card day-card">
         <div class="row-between">
           <h3>${esc(d.day)}</h3>
@@ -238,25 +272,30 @@ function renderTrain() {
             .join("")}
         </ul>
         ${d.finisher ? `<p class="finisher">Finisher: ${esc(d.finisher)}</p>` : ""}
-      </div>`
-    )
-    .join("");
-
-  const history = state.workouts
-    .slice(-10)
-    .reverse()
-    .map((w) => {
-      const best = w.entries
-        .filter((e) => e.sets.some((s) => s.weight > 0))
-        .slice(0, 3)
-        .map((e) => {
-          const top = e.sets.reduce((a, s) => ((s.weight || 0) > (a.weight || 0) ? s : a), {});
-          return `${esc(e.name)} ${top.weight || 0}x${top.reps || 0}`;
-        })
-        .join(" · ");
-      return `<li><strong>${w.date}</strong> — ${esc(w.day)}${best ? `<br><span class="muted small">${best}</span>` : ""}</li>`;
+      </div>`;
     })
     .join("");
+
+  const events = [
+    ...state.workouts.map((w) => {
+      const best = w.entries
+        .filter((e) => e.sets.some((s) => s.weight > 0 || s.reps > 0))
+        .slice(0, 3)
+        .map((e) => {
+          const top = e.sets.reduce((a, s) => ((s.weight || 0) > (a.weight || 0) ? s : a), e.sets[0] || {});
+          return `${esc(e.name)} ${top.weight ? top.weight + "x" : "bw x"}${top.reps || 0}`;
+        })
+        .join(" · ");
+      return { date: w.date, html: `<strong>${w.date}</strong> — ${esc(w.day)}${best ? `<br><span class="muted small">${best}</span>` : ""}` };
+    }),
+    ...state.runs.map((r) => ({
+      date: r.date,
+      html: `<strong>${r.date}</strong> — ${esc(r.type)}<br><span class="muted small">${r.miles} mi · ${fmtDuration(r.minutes)} · ${fmtPace(r.minutes / r.miles)}/mi${r.notes ? " · " + esc(r.notes) : ""}</span>`,
+    })),
+  ]
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, 10);
+  const history = events.map((e) => `<li>${e.html}</li>`).join("");
 
   return `
     <h1>Train</h1>
@@ -306,6 +345,55 @@ function renderTrain() {
     </div>`;
 }
 
+// ---------- run logging ----------
+
+function startRun(runIndex) {
+  const pos = planPos(0);
+  const runs = runWeek(pos, state.profile.runsPerWeek || 0, activeQuarters());
+  const r = runs[runIndex] || runs[0];
+  if (!r) return;
+  runSession = { day: r.day, desc: r.desc };
+  go("runlog");
+}
+
+function renderRunLog() {
+  if (!runSession) return renderTrain();
+  return `
+    <h1>${esc(runSession.day)}</h1>
+    <div class="card">
+      <p class="suggest">${esc(runSession.desc)}</p>
+      <div class="form-grid">
+        <label>Distance (miles) <input id="run-miles" type="number" inputmode="decimal" step="0.1" placeholder="e.g. 4.5"></label>
+        <label>Time — minutes <input id="run-min" type="number" inputmode="numeric" placeholder="e.g. 38"></label>
+        <label>Time — seconds <input id="run-sec" type="number" inputmode="numeric" placeholder="e.g. 30"></label>
+        <label>Notes (optional) <input id="run-notes" placeholder="felt easy, hot out, negative split…"></label>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn primary" data-action="save-run">Save run</button>
+      <button class="btn" data-action="cancel-run">Discard</button>
+    </div>`;
+}
+
+function saveRun() {
+  const miles = parseFloat(document.getElementById("run-miles").value);
+  const minutes = (parseFloat(document.getElementById("run-min").value) || 0) + (parseFloat(document.getElementById("run-sec").value) || 0) / 60;
+  if (!(miles > 0) || !(minutes > 0)) {
+    alert("Enter at least distance and time.");
+    return;
+  }
+  state.runs.push({
+    date: todayStr(),
+    type: runSession.day,
+    miles: Math.round(miles * 100) / 100,
+    minutes: Math.round(minutes * 100) / 100,
+    notes: document.getElementById("run-notes").value.trim(),
+  });
+  saveState();
+  runSession = null;
+  go("train");
+}
+
 // ---------- Plan Builder wizard ----------
 
 const WIZ_STEPS = [
@@ -348,6 +436,7 @@ const WIZ_STEPS = [
     hint: "You built a real engine in CrossFit — this decides how much of it the plan protects, and when.",
     opts: [
       { k: "maintain", t: "Maintain with a minimum dose", d: "Finishers stay as programmed (2-3 per week). Keeps most of the engine while lifting stays the star." },
+      { k: "hybrid", t: "Hybrid lift + run", d: "Structured running sessions (easy runs, intervals, long run) scheduled into the week alongside lifting, spaced away from leg days. Runs replace finishers. Set running days per week in Profile." },
       { k: "seasonal", t: "One engine block per year", d: "One quarter where every session ends with a finisher and lifting volume drops to maintenance. Placed away from your peak." },
       { k: "copriority", t: "Co-priority all year", d: "A finisher every single training day, all year. Bigger engine, slightly slower lifting progress." },
       { k: "fade", t: "Let it fade", d: "No finishers — full focus on the barbell and physique." },
@@ -402,6 +491,9 @@ function renderWizard() {
 function finishWizard() {
   state.planConfig = { ...wizard.a };
   state.planQuarters = generateQuarters(state.planConfig, state.planStart);
+  if (state.planConfig.conditioning === "hybrid" && !state.profile.runsPerWeek) {
+    state.profile.runsPerWeek = 2; // sensible hybrid default; adjustable in Profile
+  }
   saveState();
   wizard = null;
   trainWeekOffset = 0;
@@ -528,7 +620,7 @@ function startWorkout(dayIndex) {
       const sug = suggestNext(state.workouts, b);
       const mx = maxFor(b.name, state.maxes);
       const pres = mx ? prescribedLoad(mx, b, pos.isDeload) : null;
-      const prefill = sug ? sug.weight : pres ? pres.weight : "";
+      const prefill = sug ? sug.weight || "" : pres ? pres.weight : "";
       return {
         ...b,
         suggestion: sug,
@@ -557,7 +649,7 @@ function renderLog() {
               (s, si) => `
             <div class="set-row">
               <span class="set-num">${si + 1}</span>
-              <input type="number" inputmode="decimal" placeholder="lb" value="${s.weight}" data-set="${bi}:${si}:weight">
+              <input type="number" inputmode="decimal" placeholder="${isBodyweight(b.name) ? "+lb" : "lb"}" value="${s.weight}" data-set="${bi}:${si}:weight">
               <span class="x">x</span>
               <input type="number" inputmode="numeric" placeholder="reps" value="${s.reps}" data-set="${bi}:${si}:reps">
             </div>`
@@ -601,15 +693,17 @@ function finishWorkout() {
 
 function renderProgress() {
   const w = state.workouts;
-  if (!w.length) {
+  const runs = state.runs;
+  if (!w.length && !runs.length) {
     return `
       <h1>Progress</h1>
       <div class="card empty-state">
         <h2>No data yet</h2>
-        <p class="muted">Log your first workout and this page fills up: strength trends per lift, weekly volume, muscle balance, and a consistency heatmap.</p>
+        <p class="muted">Log your first workout or run and this page fills up: strength trends per lift, weekly volume, pace and mileage, muscle balance, and a consistency heatmap.</p>
         <button class="btn primary" data-go="train">Go train</button>
       </div>`;
   }
+  const allEvents = [...w, ...runs];
 
   let totalSets = 0, tonnage = 0, weekSets = 0;
   const monday = mondayOf(new Date());
@@ -621,12 +715,42 @@ function renderProgress() {
       e.sets.forEach((s) => { tonnage += (s.weight || 0) * (s.reps || 0); });
     });
   });
-  const streak = weekStreak(w);
+  const streak = weekStreak(allEvents);
 
   const exercises = chartableExercises(w, 2);
   if (!progressEx || !exercises.includes(progressEx)) progressEx = exercises[0] || null;
-  const trend = progressEx ? exerciseTrend(w, progressEx).slice(-15) : [];
-  const best = trend.length ? Math.max(...trend.map((p) => p.y)) : 0;
+  const trend = progressEx ? exerciseTrend(w, progressEx) : { points: [], unit: "lb" };
+  const trendPts = trend.points.slice(-15);
+  const best = trendPts.length ? Math.max(...trendPts.map((p) => p.y)) : 0;
+  const repMode = trend.unit === "reps";
+
+  let runStats = "";
+  if (runs.length) {
+    const miles = runs.reduce((t, r) => t + r.miles, 0);
+    const longest = Math.max(...runs.map((r) => r.miles));
+    const paces = runs.filter((r) => r.miles > 0).map((r) => r.minutes / r.miles);
+    const bestPace = Math.min(...paces);
+    runStats = `
+    <h2 class="cat-head">Running</h2>
+    <div class="stat-grid">
+      <div class="card stat"><span class="stat-num">${runs.length}</span><span class="muted small">runs logged</span></div>
+      <div class="card stat"><span class="stat-num">${Math.round(miles * 10) / 10}</span><span class="muted small">miles all-time</span></div>
+      <div class="card stat"><span class="stat-num">${Math.round(longest * 10) / 10}</span><span class="muted small">longest run (mi)</span></div>
+      <div class="card stat"><span class="stat-num">${fmtPace(bestPace)}</span><span class="muted small">best pace /mi</span></div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <h2>Weekly mileage</h2>
+        <p class="muted small">Miles per week, last 12 weeks.</p>
+        ${svgBars(weeklyMileage(runs, 12), "#06b6d4")}
+      </div>
+      <div class="card">
+        <h2>Pace trend</h2>
+        <p class="muted small">Average pace per run — lower is faster.</p>
+        ${svgLine(paceTrend(runs, 15), "#f59e0b", { fmtAxis: (v) => fmtPace(v), fmtVal: (v) => fmtPace(v) + "/mi" })}
+      </div>
+    </div>`;
+  }
 
   const split = muscleSplit(w, 28);
   const hasSplit = split.some((g) => g.y > 0);
@@ -644,19 +768,19 @@ function renderProgress() {
     <div class="card">
       <div class="row-between">
         <h2>Consistency</h2>
-        <span class="muted small">last 16 weeks</span>
+        <span class="muted small">workouts + runs, last 16 weeks</span>
       </div>
-      ${heatmapHTML(w, 16)}
+      ${heatmapHTML(allEvents, 16)}
     </div>
 
     <div class="grid-2">
       <div class="card">
         <div class="row-between">
-          <h2>Strength trend</h2>
+          <h2>${repMode ? "Reps trend" : "Strength trend"}</h2>
           ${exercises.length ? `<select id="progress-ex" class="inline-select">${exercises.map((x) => `<option ${x === progressEx ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>` : ""}
         </div>
-        <p class="muted small">Estimated 1RM per session (Epley), best set of the day.${best ? ` All-time best: <strong>${best} lb</strong>.` : ""}</p>
-        ${progressEx ? svgLine(trend, "#3b82f6") : `<p class="muted small">Log an exercise at least twice to unlock this chart.</p>`}
+        <p class="muted small">${repMode ? "Best set of the day (bodyweight reps)." : "Estimated 1RM per session (Epley), best set of the day."}${best ? ` All-time best: <strong>${best} ${trend.unit}</strong>.` : ""}</p>
+        ${progressEx ? svgLine(trendPts, "#3b82f6", repMode ? { fmtAxis: (v) => Math.round(v), fmtVal: (v) => v + " reps" } : undefined) : `<p class="muted small">Log an exercise at least twice to unlock this chart.</p>`}
       </div>
 
       <div class="card">
@@ -670,7 +794,8 @@ function renderProgress() {
       <h2>Muscle balance</h2>
       <p class="muted small">Hard sets per muscle group, last 4 weeks. Big gaps here are where growth hides.</p>
       ${hasSplit ? hBars(split, "#8b5cf6") : `<p class="muted small">Log a few workouts to see your split.</p>`}
-    </div>`;
+    </div>
+    ${runStats}`;
 }
 
 // ---------- Eat ----------
@@ -868,6 +993,11 @@ function renderProfile() {
             ${[3, 4, 5, 6].map((d) => `<option value="${d}" ${p.daysPerWeek === d ? "selected" : ""}>${d}</option>`).join("")}
           </select>
         </label>
+        <label>Running days per week
+          <select id="p-runs">
+            ${[0, 1, 2, 3].map((d) => `<option value="${d}" ${(p.runsPerWeek || 0) === d ? "selected" : ""}>${d === 0 ? "0 — no running" : d}</option>`).join("")}
+          </select>
+        </label>
         <label class="check"><input id="p-conditioning" type="checkbox" ${p.conditioning ? "checked" : ""}> Include conditioning finishers</label>
       </div>
     </div>
@@ -910,6 +1040,7 @@ function saveProfile() {
     activity: document.getElementById("p-activity").value,
     goal: document.getElementById("p-goal").value,
     daysPerWeek: parseInt(document.getElementById("p-days").value, 10),
+    runsPerWeek: parseInt(document.getElementById("p-runs").value, 10) || 0,
     conditioning: document.getElementById("p-conditioning").checked,
   };
   const maxes = {};
@@ -965,14 +1096,19 @@ function importBackup() {
 
 document.addEventListener("click", (e) => {
   const t = e.target.closest(
-    "[data-go],[data-start],[data-action],[data-add-food],[data-del-food],[data-week],[data-edit-day],[data-move],[data-rm-ex],[data-wiz-opt]"
+    "[data-go],[data-start],[data-action],[data-add-food],[data-del-food],[data-week],[data-edit-day],[data-move],[data-rm-ex],[data-wiz-opt],[data-run-start]"
   );
   if (!t) return;
   if (t.dataset.go) {
     if (t.dataset.go === "train") trainWeekOffset = 0;
     go(t.dataset.go);
   } else if (t.dataset.start !== undefined) startWorkout(parseInt(t.dataset.start, 10));
-  else if (t.dataset.week !== undefined) {
+  else if (t.dataset.runStart !== undefined) startRun(parseInt(t.dataset.runStart, 10));
+  else if (t.dataset.action === "save-run") saveRun();
+  else if (t.dataset.action === "cancel-run") {
+    runSession = null;
+    go("train");
+  } else if (t.dataset.week !== undefined) {
     if (t.dataset.week === "reset") trainWeekOffset = 0;
     else trainWeekOffset += parseInt(t.dataset.week, 10);
     render();
