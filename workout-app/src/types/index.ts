@@ -250,3 +250,69 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultRestSeconds: 90,
   rpeDisplay: 'rpe',
 };
+
+// ---------- Nutrition ----------
+
+export type Allergen =
+  | 'dairy' | 'gluten' | 'tree_nuts' | 'peanuts' | 'shellfish'
+  | 'fish' | 'eggs' | 'soy' | 'sesame';
+
+export type FoodCategory =
+  | 'protein' | 'grain' | 'fruit' | 'vegetable' | 'dairy'
+  | 'fat' | 'snack' | 'beverage' | 'meal';
+
+export interface FoodItem {
+  id: string;
+  name: string;
+  category: FoodCategory;
+  servingLabel: string;
+  calories: number;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  fiberG?: number;
+  allergens: Allergen[];
+  tags: string[];
+  isCustom: boolean;
+}
+
+export type MealType = 'breakfast' | 'lunch' | 'dinner' | 'snack';
+
+export interface NutritionLogEntry {
+  id: string;
+  date: Date;
+  mealType: MealType;
+  foodId?: string;
+  name: string;
+  servings: number;
+  calories: number;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  notes: string;
+}
+
+export type ActivityLevel = 'sedentary' | 'light' | 'moderate' | 'very_active' | 'extra_active';
+export type NutritionGoal = 'cut' | 'maintain' | 'bulk';
+
+export interface NutritionProfile {
+  sex: 'male' | 'female';
+  age: number;
+  heightInches: number;
+  weightLbs: number;
+  activityLevel: ActivityLevel;
+  goal: NutritionGoal;
+  /** grams of protein per lb of bodyweight (0.7–1.2 typical) */
+  proteinPerLb: number;
+}
+
+export interface NutritionPreferences {
+  allergens: Allergen[];
+  /** free-text food names/keywords the user refuses to eat */
+  dislikes: string[];
+}
+
+export const DEFAULT_NUTRITION_PREFS: NutritionPreferences = {
+  allergens: [],
+  dislikes: [],
+};

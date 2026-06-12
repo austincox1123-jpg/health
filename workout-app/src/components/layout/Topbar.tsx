@@ -8,6 +8,7 @@ const titles: [string, string][] = [
   ['/workouts', 'Workouts'],
   ['/plan', 'Periodization Plan'],
   ['/progress', 'Progress'],
+  ['/nutrition', 'Nutrition'],
   ['/library', 'Exercise Library'],
   ['/settings', 'Settings'],
   ['/', 'Dashboard'],

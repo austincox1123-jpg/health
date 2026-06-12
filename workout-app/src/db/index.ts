@@ -2,8 +2,10 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type {
   AnnualPlan, QuarterBlock, Phase, WeekPlan, PlannedSession,
   WorkoutTemplate, CompletedWorkout, Exercise, BodyMetrics, PersonalRecord,
+  FoodItem, NutritionLogEntry,
 } from '../types';
 import { exerciseLibrary } from '../data/exerciseLibrary';
+import { foodLibrary } from '../data/foodLibrary';
 
 interface WorkoutAppDB extends DBSchema {
   annual_plans: { key: string; value: AnnualPlan };
@@ -16,13 +18,15 @@ interface WorkoutAppDB extends DBSchema {
   exercises: { key: string; value: Exercise };
   body_metrics: { key: string; value: BodyMetrics };
   personal_records: { key: string; value: PersonalRecord };
+  foods: { key: string; value: FoodItem };
+  nutrition_logs: { key: string; value: NutritionLogEntry };
   settings: { key: string; value: unknown };
 }
 
 const STORE_NAMES = [
   'annual_plans', 'quarter_blocks', 'phases', 'week_plans', 'planned_sessions',
   'workout_templates', 'completed_workouts', 'exercises', 'body_metrics',
-  'personal_records', 'settings',
+  'personal_records', 'foods', 'nutrition_logs', 'settings',
 ] as const;
 
 export type StoreName = (typeof STORE_NAMES)[number];
@@ -40,7 +44,7 @@ let dbPromise: Promise<IDBPDatabase<WorkoutAppDB>> | null = null;
 
 export function getDB(): Promise<IDBPDatabase<WorkoutAppDB>> {
   if (!dbPromise) {
-    dbPromise = openDB<WorkoutAppDB>('workout-app', 1, {
+    dbPromise = openDB<WorkoutAppDB>('workout-app', 2, {
       upgrade(db) {
         for (const name of STORE_NAMES) {
           if (!db.objectStoreNames.contains(name)) {
@@ -90,12 +94,14 @@ export async function clearAllStores(): Promise<void> {
   await Promise.all([...STORE_NAMES.map((s) => tx.objectStore(s).clear()), tx.done]);
 }
 
-/** Seed the exercise library on first load. */
+/** Seed the exercise and food libraries on first load. */
 export async function seedIfEmpty(): Promise<void> {
   const db = await getDB();
-  const count = await db.count('exercises');
-  if (count === 0) {
+  if ((await db.count('exercises')) === 0) {
     await putMany('exercises', exerciseLibrary);
+  }
+  if ((await db.count('foods')) === 0) {
+    await putMany('foods', foodLibrary);
   }
 }
 

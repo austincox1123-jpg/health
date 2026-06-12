@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard, CalendarRange, Dumbbell, TrendingUp, Library, Settings, Zap,
+  LayoutDashboard, CalendarRange, Dumbbell, TrendingUp, Library, Settings, Zap, Apple,
 } from 'lucide-react';
 
 const navItems = [
@@ -8,6 +8,7 @@ const navItems = [
   { to: '/plan', label: 'Plan', icon: CalendarRange },
   { to: '/workouts', label: 'Workouts', icon: Dumbbell },
   { to: '/progress', label: 'Progress', icon: TrendingUp },
+  { to: '/nutrition', label: 'Nutrition', icon: Apple },
   { to: '/library', label: 'Library', icon: Library },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];

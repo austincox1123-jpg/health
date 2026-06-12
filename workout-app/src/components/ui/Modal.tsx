@@ -33,9 +33,16 @@ export function Modal({ open, onClose, title, children, wide = false }: ModalPro
       }
     };
     document.addEventListener('keydown', onKey);
-    panelRef.current?.querySelector<HTMLElement>('button, input, select, textarea')?.focus();
     return () => document.removeEventListener('keydown', onKey);
   }, [open, onClose]);
+
+  // Auto-focus only on open — re-running this on later renders would steal
+  // focus from whatever field the user is typing in.
+  useEffect(() => {
+    if (open) {
+      panelRef.current?.querySelector<HTMLElement>('button, input, select, textarea')?.focus();
+    }
+  }, [open]);
 
   if (!open) return null;
 

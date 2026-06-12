@@ -11,6 +11,7 @@ import { useExerciseStore } from '../stores/exerciseStore';
 import { useWorkoutStore } from '../stores/workoutStore';
 import { usePlanStore } from '../stores/planStore';
 import { useMetricsStore } from '../stores/metricsStore';
+import { useNutritionStore } from '../stores/nutritionStore';
 import { toast } from '../stores/toastStore';
 import { exportAllData, importAllData, clearAllStores, seedIfEmpty } from '../db';
 import type { RPEDisplay, WeekStart, WeightUnit } from '../types';
@@ -22,6 +23,7 @@ async function reloadAllStores(): Promise<void> {
     useWorkoutStore.getState().load(),
     usePlanStore.getState().load(),
     useMetricsStore.getState().load(),
+    useNutritionStore.getState().load(),
   ]);
 }
 

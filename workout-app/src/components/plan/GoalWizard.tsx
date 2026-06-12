@@ -18,8 +18,10 @@ import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { Badge, phaseTypeColor } from '../ui/Badge';
 import { usePlanStore } from '../../stores/planStore';
+import { useWorkoutStore } from '../../stores/workoutStore';
 import { toast } from '../../stores/toastStore';
 import { generateAnnualPlan, type PlanWizardInput } from '../../utils/planGenerator';
+import { generatePlanWorkouts } from '../../utils/workoutGenerator';
 import { PHASE_COLORS, GOAL_LABELS, PHASE_LABELS } from '../../data/phaseTemplates';
 import { formatShort, formatFull } from '../../utils/dates';
 import {
@@ -29,7 +31,7 @@ import {
   VOLUME_LABELS,
   INTENSITY_LABELS,
 } from './planShared';
-import type { AnnualPlan, GoalType } from '../../types';
+import type { AnnualPlan, GoalType, WorkoutTemplate } from '../../types';
 
 const GOAL_ICONS: Record<GoalType, LucideIcon> = {
   fat_loss: Flame,
@@ -121,6 +123,7 @@ function MiniGantt({ plan }: { plan: AnnualPlan }) {
 export function GoalWizard({ open, onClose }: { open: boolean; onClose: () => void }) {
   const savePlan = usePlanStore((s) => s.savePlan);
   const setActivePlan = usePlanStore((s) => s.setActivePlan);
+  const saveTemplate = useWorkoutStore((s) => s.saveTemplate);
 
   const today = new Date();
   const [step, setStep] = useState(1);
@@ -131,6 +134,7 @@ export function GoalWizard({ open, onClose }: { open: boolean; onClose: () => vo
   const [equipment, setEquipment] = useState<PlanWizardInput['equipment']>('full_gym');
   const [events, setEvents] = useState<EventRow[]>([]);
   const [preview, setPreview] = useState<AnnualPlan | null>(null);
+  const [previewTemplates, setPreviewTemplates] = useState<WorkoutTemplate[]>([]);
 
   const reset = () => {
     setStep(1);
@@ -141,6 +145,7 @@ export function GoalWizard({ open, onClose }: { open: boolean; onClose: () => vo
     setEquipment('full_gym');
     setEvents([]);
     setPreview(null);
+    setPreviewTemplates([]);
   };
 
   const close = () => {
@@ -159,7 +164,14 @@ export function GoalWizard({ open, onClose }: { open: boolean; onClose: () => vo
       .map((e) => ({ date: fromDateInput(e.date), label: e.label.trim() })),
   });
 
-  const regenerate = () => setPreview(generateAnnualPlan(buildInput()));
+  const buildPreview = () => {
+    const input = buildInput();
+    const { templates, plan } = generatePlanWorkouts(input, generateAnnualPlan(input));
+    setPreview(plan);
+    setPreviewTemplates(templates);
+  };
+
+  const regenerate = () => buildPreview();
 
   const goNext = () => {
     if (step === 2) {
@@ -168,16 +180,22 @@ export function GoalWizard({ open, onClose }: { open: boolean; onClose: () => vo
         toast('error', 'Pick a valid start date');
         return;
       }
-      setPreview(generateAnnualPlan(buildInput()));
+      buildPreview();
     }
     setStep((s) => Math.min(3, s + 1));
   };
 
   const accept = async () => {
     if (!preview) return;
+    for (const template of previewTemplates) {
+      await saveTemplate(template);
+    }
     await savePlan(preview);
     await setActivePlan(preview.id);
-    toast('success', 'Plan generated');
+    toast(
+      'success',
+      `Plan generated with ${previewTemplates.length} workout template${previewTemplates.length === 1 ? '' : 's'}`,
+    );
     close();
   };
 
@@ -378,6 +396,27 @@ export function GoalWizard({ open, onClose }: { open: boolean; onClose: () => vo
               </tbody>
             </table>
           </div>
+
+          {previewTemplates.length > 0 && (
+            <div>
+              <p className="section-label mb-1.5">
+                Workout Templates ({previewTemplates.length})
+              </p>
+              <p className="text-xs text-text-secondary mb-2">
+                Created automatically and linked to your planned sessions. Edit them later in Workouts.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {previewTemplates.map((t) => (
+                  <span
+                    key={t.id}
+                    className="px-2 py-1 rounded-sm border border-border bg-surface-alt text-xs font-semibold text-text-secondary"
+                  >
+                    {t.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

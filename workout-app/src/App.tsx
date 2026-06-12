@@ -6,6 +6,8 @@ import { useExerciseStore } from './stores/exerciseStore';
 import { useWorkoutStore } from './stores/workoutStore';
 import { usePlanStore } from './stores/planStore';
 import { useMetricsStore } from './stores/metricsStore';
+import { useNutritionStore } from './stores/nutritionStore';
+import { seedIfEmpty } from './db';
 import { SkeletonCard } from './components/ui/Skeleton';
 import { DashboardPage } from './pages/DashboardPage';
 import { PlanPage } from './pages/PlanPage';
@@ -14,19 +16,22 @@ import { WorkoutLoggerPage } from './pages/WorkoutLoggerPage';
 import { WorkoutDetailPage } from './pages/WorkoutDetailPage';
 import { ProgressPage } from './pages/ProgressPage';
 import { LibraryPage } from './pages/LibraryPage';
+import { NutritionPage } from './pages/NutritionPage';
 import { SettingsPage } from './pages/SettingsPage';
 
 export default function App() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    Promise.all([
+    // Seed before any store reads, so foods/exercises are never racily empty
+    seedIfEmpty().then(() => Promise.all([
       useSettingsStore.getState().load(),
       useExerciseStore.getState().load(),
       useWorkoutStore.getState().load(),
       usePlanStore.getState().load(),
       useMetricsStore.getState().load(),
-    ]).then(() => setReady(true));
+      useNutritionStore.getState().load(),
+    ])).then(() => setReady(true));
   }, []);
 
   if (!ready) {
@@ -50,6 +55,7 @@ export default function App() {
         <Route path="/workouts/:id" element={<WorkoutDetailPage />} />
         <Route path="/progress" element={<ProgressPage />} />
         <Route path="/library" element={<LibraryPage />} />
+        <Route path="/nutrition" element={<NutritionPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>
     </Routes>
