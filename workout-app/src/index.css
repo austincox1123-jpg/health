@@ -1,0 +1,39 @@
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/800.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/600.css';
+@import '@fontsource/jetbrains-mono/700.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply bg-background text-text-primary antialiased;
+  }
+  body {
+    @apply font-sans text-sm;
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-background;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border rounded;
+  }
+}
+
+@layer components {
+  .section-label {
+    @apply text-xs font-extrabold uppercase tracking-label text-text-secondary;
+  }
+  .stat-value {
+    @apply font-mono font-bold text-text-primary;
+  }
+}

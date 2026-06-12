@@ -28,6 +28,9 @@ function loadState() {
   if (!s.planConfig) s.planConfig = null;
   if (!s.planQuarters) s.planQuarters = null;
   if (!s.runs) s.runs = [];
+  if (!s.savedMeals) s.savedMeals = [];
+  if (!s.sync) s.sync = { name: "", token: "", gistId: null, last: null };
+  if (!("breakDismissed" in s)) s.breakDismissed = null;
   return s;
 }
 
@@ -162,7 +165,7 @@ function renderToday() {
   const pos = planPos(0);
   const q = activeQuarters()[pos.quarter];
   const program = weekProgram(baseTemplate(), pos, planOpts());
-  const runs = runWeek(pos, p.runsPerWeek || 0, activeQuarters());
+  const runs = runWeek(pos, p.runsPerWeek || 0, activeQuarters(), p.fiveKMin);
   const done = weekWorkoutCount();
   const runsDone = weekRunCount();
   const liftsLeft = done < p.daysPerWeek;
@@ -234,7 +237,7 @@ function renderTrain() {
       </div>`;
   }).join("");
 
-  const runs = runWeek(pos, p.runsPerWeek || 0, quarters);
+  const runs = runWeek(pos, p.runsPerWeek || 0, quarters, p.fiveKMin);
   const sessions = mergeWeek(week, runs);
 
   const dayCards = sessions
@@ -349,10 +352,18 @@ function renderTrain() {
 
 function startRun(runIndex) {
   const pos = planPos(0);
-  const runs = runWeek(pos, state.profile.runsPerWeek || 0, activeQuarters());
+  const runs = runWeek(pos, state.profile.runsPerWeek || 0, activeQuarters(), state.profile.fiveKMin);
   const r = runs[runIndex] || runs[0];
   if (!r) return;
   runSession = { day: r.day, desc: r.desc };
+  go("runlog");
+}
+
+// Re-open a logged run for editing (date preserved on save).
+function editRun(idx) {
+  const r = state.runs[idx];
+  if (!r) return;
+  runSession = { day: r.type, desc: `Editing run from ${r.date}`, editIndex: idx, miles: r.miles, minutes: r.minutes, notes: r.notes || "" };
   go("runlog");
 }
 
@@ -363,10 +374,10 @@ function renderRunLog() {
     <div class="card">
       <p class="suggest">${esc(runSession.desc)}</p>
       <div class="form-grid">
-        <label>Distance (miles) <input id="run-miles" type="number" inputmode="decimal" step="0.1" placeholder="e.g. 4.5"></label>
-        <label>Time — minutes <input id="run-min" type="number" inputmode="numeric" placeholder="e.g. 38"></label>
-        <label>Time — seconds <input id="run-sec" type="number" inputmode="numeric" placeholder="e.g. 30"></label>
-        <label>Notes (optional) <input id="run-notes" placeholder="felt easy, hot out, negative split…"></label>
+        <label>Distance (miles) <input id="run-miles" type="number" inputmode="decimal" step="0.1" placeholder="e.g. 4.5" value="${runSession.miles || ""}"></label>
+        <label>Time — minutes <input id="run-min" type="number" inputmode="numeric" placeholder="e.g. 38" value="${runSession.minutes ? Math.floor(runSession.minutes) : ""}"></label>
+        <label>Time — seconds <input id="run-sec" type="number" inputmode="numeric" placeholder="e.g. 30" value="${runSession.minutes ? Math.round((runSession.minutes % 1) * 60) : ""}"></label>
+        <label>Notes (optional) <input id="run-notes" placeholder="felt easy, hot out, negative split…" value="${esc(runSession.notes || "")}"></label>
       </div>
     </div>
     <div class="actions">
@@ -382,13 +393,15 @@ function saveRun() {
     alert("Enter at least distance and time.");
     return;
   }
-  state.runs.push({
-    date: todayStr(),
+  const entry = {
+    date: runSession.editIndex != null ? state.runs[runSession.editIndex].date : todayStr(),
     type: runSession.day,
     miles: Math.round(miles * 100) / 100,
     minutes: Math.round(minutes * 100) / 100,
     notes: document.getElementById("run-notes").value.trim(),
-  });
+  };
+  if (runSession.editIndex != null) state.runs[runSession.editIndex] = entry;
+  else state.runs.push(entry);
   saveState();
   runSession = null;
   go("train");

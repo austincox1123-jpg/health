@@ -185,6 +185,33 @@ function isBodyweight(name) {
 // Structured run sessions, periodized like everything else: durations climb
 // through build weeks, shrink on deloads, and the interval flavor follows
 // the quarter's intent.
+// Personal pace targets from a recent 5K (or best-effort) time, using
+// simplified Daniels-style offsets from 5K race pace.
+const MILES_5K = 3.107;
+
+function minToPace(p) {
+  const m = Math.floor(p);
+  const s = Math.round((p - m) * 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function paceTargets(fiveKMin) {
+  if (!(fiveKMin > 0)) return null;
+  const p5 = fiveKMin / MILES_5K; // 5K race pace, min/mi
+  return {
+    easy: `${minToPace(p5 + 1.5)}–${minToPace(p5 + 2.2)}/mi`,
+    tempo: `${minToPace(p5 + 0.42)}/mi`,
+    rep800: minToPace(p5 * 0.497), // 800m at 5K pace
+    rep400: minToPace((p5 - 0.33) * 0.2486), // 400m a touch faster
+  };
+}
+
+// Riegel prediction: equivalent 5K time from any logged run.
+function predict5K(miles, minutes) {
+  if (!(miles >= 1) || !(minutes > 0)) return null;
+  return minutes * Math.pow(MILES_5K / miles, 1.06);
+}
+
 const INTERVAL_BY_BLOCK = {
   foundation: "6 x 800m at 5K effort, 2 min jog rest",
   hypertrophy: "6 x 800m at 5K effort, 2 min jog rest",
@@ -194,27 +221,32 @@ const INTERVAL_BY_BLOCK = {
   engine: "3 x 1 mile at threshold, 3 min jog rest",
 };
 
-function runWeek(pos, runsPerWeek, quarters) {
+function runWeek(pos, runsPerWeek, quarters, fiveKMin) {
   if (!runsPerWeek) return [];
   const q = quarters[pos.quarter];
+  const t = paceTargets(fiveKMin);
   const lineup = runsPerWeek >= 3 ? ["easy", "intervals", "long"] : runsPerWeek === 2 ? ["intervals", "long"] : ["long"];
   const mult = (pos.isDeload ? 0.6 : 1 + pos.weekInMeso * 0.1) * (q.engine ? 1.2 : q.key === "peak" ? 0.8 : 1);
   return lineup.map((k) => {
     if (k === "intervals") {
-      return {
-        day: "Run · Intervals",
-        run: true,
-        desc: pos.isDeload
-          ? "20-25 min easy jog (deload — no hard running this week)"
-          : `10 min warm-up · ${INTERVAL_BY_BLOCK[q.key] || INTERVAL_BY_BLOCK.foundation} · 10 min cool-down`,
-      };
+      if (pos.isDeload) {
+        return { day: "Run · Intervals", run: true, desc: "20-25 min easy jog (deload — no hard running this week)" };
+      }
+      const body = INTERVAL_BY_BLOCK[q.key] || INTERVAL_BY_BLOCK.foundation;
+      let target = "";
+      if (t) {
+        if (body.includes("800m")) target = ` · target ≈${t.rep800} per 800`;
+        else if (body.includes("400m")) target = ` · target ≈${t.rep400} per 400`;
+        else target = ` · target ${t.tempo}`;
+      }
+      return { day: "Run · Intervals", run: true, desc: `10 min warm-up · ${body}${target} · 10 min cool-down` };
     }
     const base = k === "long" ? 55 : 35;
     const min = Math.max(20, Math.round((base * mult) / 5) * 5);
     return {
       day: k === "long" ? "Run · Long Run" : "Run · Easy Run",
       run: true,
-      desc: `${min} min at conversational pace (Zone 2)${k === "long" ? " — steady, finish feeling like you had more" : ""}`,
+      desc: `${min} min at conversational pace (Zone 2)${t ? ` · target ${t.easy}` : ""}${k === "long" ? " — steady, finish feeling like you had more" : ""}`,
     };
   });
 }
